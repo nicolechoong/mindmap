@@ -70,10 +70,16 @@ function createEdge(sourceId: string, targetId: string): MindMapEdge {
     };
 }
 
-function createSubNode(text: string): SubNode {
+function createSubNode(
+    text: string,
+    type: 'checklist' | 'attachment' = 'checklist',
+    filePath?: string,
+): SubNode {
     return {
         id: nanoid(),
         text,
+        type,
+        filePath,
         checked: false,
         collapsed: false,
         subNodes: [],
@@ -185,18 +191,25 @@ export interface MindMapStore {
 
     // SubNode actions
     addSubNode: (nodeId: string, parentSubNodeId?: string, text?: string) => void;
+    addAttachmentSubNode: (nodeId: string, filePath: string, fileName: string) => void;
     deleteSubNode: (nodeId: string, subNodeId: string) => void;
     updateSubNodeText: (nodeId: string, subNodeId: string, text: string) => void;
     toggleSubNodeChecked: (nodeId: string, subNodeId: string) => void;
     toggleSubNodeCollapse: (nodeId: string, subNodeId: string) => void;
     promoteSubNode: (nodeId: string, subNodeId: string) => string | null;
     demoteNode: (spawnedNodeId: string) => void;
+    reorderSubNode: (nodeId: string, subNodeId: string, newIndex: number) => void;
 
     // Links
     addLink: (sourceId: string, targetId: string) => string;
     deleteLink: (linkId: string) => void;
     setLinkingSource: (nodeId: string | null) => void;
     selectLink: (linkId: string | null) => void;
+
+    // SubNode selection
+    selectedSubNodeId: string | null;
+    selectedSubNodeParentId: string | null;
+    setSelectedSubNode: (nodeId: string | null, subNodeId: string | null) => void;
 
     // Selection
     setSelection: (nodeIds: string[]) => void;
@@ -231,6 +244,8 @@ function createInitialState() {
         rootIds: [rootNode.id],
         manualPositions: {} as Record<string, { x: number; y: number }>,
         selectedNodeIds: [] as string[],
+        selectedSubNodeId: null as string | null,
+        selectedSubNodeParentId: null as string | null,
         linkingSourceId: null as string | null,
         selectedLinkId: null as string | null,
         viewport: { x: 0, y: 0, zoom: 1 },
@@ -475,7 +490,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 const node = state.nodes[nodeId];
                 if (!node) return;
 
-                const newSub = createSubNode(text);
+                const newSub = createSubNode(text, 'checklist');
 
                 if (parentSubNodeId) {
                     const parentSub = findSubNode(node.subNodes, parentSubNodeId);
@@ -485,6 +500,15 @@ export const useMindMapStore = create<MindMapStore>()(
                 } else {
                     node.subNodes.push(newSub);
                 }
+            });
+        },
+
+        addAttachmentSubNode: (nodeId, filePath, fileName) => {
+            set((state) => {
+                const node = state.nodes[nodeId];
+                if (!node) return;
+                const newSub = createSubNode(fileName, 'attachment', filePath);
+                node.subNodes.push(newSub);
             });
         },
 
@@ -617,6 +641,18 @@ export const useMindMapStore = create<MindMapStore>()(
             });
         },
 
+        reorderSubNode: (nodeId, subNodeId, newIndex) => {
+            set((state) => {
+                const node = state.nodes[nodeId];
+                if (!node) return;
+                const idx = node.subNodes.findIndex((sn) => sn.id === subNodeId);
+                if (idx < 0) return;
+                const [removed] = node.subNodes.splice(idx, 1);
+                const clampedIndex = Math.max(0, Math.min(newIndex, node.subNodes.length));
+                node.subNodes.splice(clampedIndex, 0, removed);
+            });
+        },
+
         // ── Links ─────────────────────────────────────────────────────────────
 
         addLink: (sourceId, targetId) => {
@@ -656,9 +692,18 @@ export const useMindMapStore = create<MindMapStore>()(
 
         // ── Selection ───────────────────────────────────────────────────────
 
+        setSelectedSubNode: (nodeId, subNodeId) => {
+            set((state) => {
+                state.selectedSubNodeId = subNodeId;
+                state.selectedSubNodeParentId = nodeId;
+            });
+        },
+
         setSelection: (nodeIds) => {
             set((state) => {
                 state.selectedNodeIds = nodeIds;
+                state.selectedSubNodeId = null;
+                state.selectedSubNodeParentId = null;
             });
         },
 
@@ -676,6 +721,8 @@ export const useMindMapStore = create<MindMapStore>()(
         clearSelection: () => {
             set((state) => {
                 state.selectedNodeIds = [];
+                state.selectedSubNodeId = null;
+                state.selectedSubNodeParentId = null;
             });
         },
 

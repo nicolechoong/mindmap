@@ -284,6 +284,22 @@ ipcMain.handle('export:json', async (_event, json: string) => {
   return { filePath: result.filePath };
 });
 
+// ── Attachment IPC ────────────────────────────────────────────────────────
+
+ipcMain.handle('shell:openPath', async (_event, filePath: string) => {
+  await shell.openPath(filePath);
+});
+
+ipcMain.handle('dialog:pickFile', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  const filePath = result.filePaths[0];
+  const fileName = path.basename(filePath);
+  return { filePath, fileName };
+});
+
 // ── App lifecycle ─────────────────────────────────────────────────────────
 
 app.on('ready', () => {

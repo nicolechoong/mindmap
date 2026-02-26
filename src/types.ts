@@ -11,6 +11,8 @@ declare global {
 export interface SubNode {
     id: string;
     text: string;
+    type: 'checklist' | 'attachment';
+    filePath?: string;      // absolute path – only for type === 'attachment'
     checked: boolean;
     collapsed: boolean;
     subNodes: SubNode[];

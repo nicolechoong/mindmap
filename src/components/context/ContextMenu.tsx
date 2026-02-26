@@ -30,6 +30,7 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuPro
     const deleteSubNode = useMindMapStore((s) => s.deleteSubNode);
     const promoteSubNode = useMindMapStore((s) => s.promoteSubNode);
     const demoteNode = useMindMapStore((s) => s.demoteNode);
+    const addAttachmentSubNode = useMindMapStore((s) => s.addAttachmentSubNode);
     const toggleCollapse = useMindMapStore((s) => s.toggleCollapse);
     const pushUndo = useMindMapStore((s) => s.pushUndo);
     const setSelection = useMindMapStore((s) => s.setSelection);
@@ -37,6 +38,7 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuPro
     const links = useMindMapStore((s) => s.links);
     const setLinkingSource = useMindMapStore((s) => s.setLinkingSource);
     const deleteLink = useMindMapStore((s) => s.deleteLink);
+    const reorderSubNode = useMindMapStore((s) => s.reorderSubNode);
 
     const node = nodes[nodeId];
     if (!node) return null;
@@ -60,25 +62,38 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuPro
 
     const sn = subNodeId ? findSn(node.subNodes, subNodeId) : null;
 
+    // Find top-level index for reorder
+    const topLevelIdx = subNodeId ? node.subNodes.findIndex((s) => s.id === subNodeId) : -1;
+    const isTopLevel = topLevelIdx >= 0;
+
     const items: { label: string; action: () => void; danger?: boolean; disabled?: boolean }[] = [];
 
     if (subNodeId && sn) {
         // SubNode context menu
-        if (!sn.childNodeId) {
+        const isAttachment = sn.type === 'attachment';
+        if (!isAttachment && !sn.childNodeId) {
             items.push({
                 label: '⤴ Promote to Node',
                 action: () => { pushUndo(); promoteSubNode(nodeId, subNodeId); },
             });
-        } else {
+        } else if (!isAttachment && sn.childNodeId) {
             items.push({
                 label: '⤵ Demote Back',
                 action: () => { pushUndo(); demoteNode(sn.childNodeId!); },
             });
         }
-        items.push({
-            label: '＋ Add Sub-item',
-            action: () => { pushUndo(); addSubNode(nodeId, subNodeId); },
-        });
+        if (isTopLevel) {
+            items.push({
+                label: '▲ Move Up',
+                action: () => { pushUndo(); reorderSubNode(nodeId, subNodeId, topLevelIdx - 1); },
+                disabled: topLevelIdx === 0,
+            });
+            items.push({
+                label: '▼ Move Down',
+                action: () => { pushUndo(); reorderSubNode(nodeId, subNodeId, topLevelIdx + 1); },
+                disabled: topLevelIdx === node.subNodes.length - 1,
+            });
+        }
         items.push({
             label: '✕ Delete Item',
             action: () => { pushUndo(); deleteSubNode(nodeId, subNodeId); },
@@ -107,6 +122,16 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuPro
         items.push({
             label: '☑ Add Checklist Item',
             action: () => { pushUndo(); addSubNode(nodeId); },
+        });
+        items.push({
+            label: '📎 Add Attachment',
+            action: async () => {
+                const result = await window.electronAPI.pickFile();
+                if (result) {
+                    pushUndo();
+                    addAttachmentSubNode(nodeId, result.filePath, result.fileName);
+                }
+            },
         });
         if (node.children.length > 0) {
             items.push({

@@ -63,6 +63,14 @@ export function useKeyboard() {
                 return;
             }
             if (e.key === 'Delete' || e.key === 'Backspace') {
+                // Delete selected subnode first
+                if (store.selectedSubNodeId && store.selectedSubNodeParentId) {
+                    e.preventDefault();
+                    store.pushUndo();
+                    store.deleteSubNode(store.selectedSubNodeParentId, store.selectedSubNodeId);
+                    store.setSelectedSubNode(null, null);
+                    return;
+                }
                 if (store.selectedLinkId) {
                     e.preventDefault();
                     store.pushUndo();

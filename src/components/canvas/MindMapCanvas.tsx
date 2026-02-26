@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Stage, Layer, Group, Rect, Text, Line, Circle } from 'react-konva';
+import { Stage, Layer, Group, Rect, Text, Line, Circle, Path } from 'react-konva';
 import type Konva from 'konva';
 import { useMindMapStore } from '../../store/store';
 import { computeLayout, type NodeLayoutInfo } from '../../layout/layout';
@@ -75,27 +75,55 @@ function darkenHex(hex: string, amount: number = 0.15): string {
 
 const _measureCtx = document.createElement('canvas').getContext('2d')!;
 
+function wrapTextWithNewlines(
+    text: string,
+    maxWidth: number,
+    fontSize: number,
+    fontWeight: string = '',
+): string {
+    _measureCtx.font = `${fontWeight} ${fontSize}px Inter, sans-serif`.trim();
+    if (!text || !text.trim()) return text;
+
+    const words = text.split(/(\s+)/);
+    let result = '';
+    let currentLine = '';
+
+    for (const word of words) {
+        if (_measureCtx.measureText(word).width > maxWidth) {
+            // Word is too long, must break it by character
+            for (const char of word) {
+                const testLine = currentLine + char;
+                if (_measureCtx.measureText(testLine).width > maxWidth && currentLine !== '') {
+                    result += currentLine + '\n';
+                    currentLine = char;
+                } else {
+                    currentLine = testLine;
+                }
+            }
+        } else {
+            const testLine = currentLine + word;
+            if (_measureCtx.measureText(testLine).width > maxWidth && currentLine.trim() !== '') {
+                // Remove trailing spaces on lines that wrap
+                result += currentLine.replace(/\s+$/, '') + '\n';
+                currentLine = word.trimStart();
+            } else {
+                currentLine = testLine;
+            }
+        }
+    }
+    result += currentLine;
+    return result;
+}
+
 function measureTextLines(
     text: string,
     maxWidth: number,
     fontSize: number,
     fontWeight: string = '',
 ): number {
-    _measureCtx.font = `${fontWeight} ${fontSize}px Inter, sans-serif`.trim();
-    if (!text || !text.trim()) return 1;
-    const words = text.split(/\s+/);
-    let lines = 1;
-    let currentLine = '';
-    for (const word of words) {
-        const testLine = currentLine ? `${currentLine} ${word}` : word;
-        if (_measureCtx.measureText(testLine).width > maxWidth && currentLine !== '') {
-            lines++;
-            currentLine = word;
-        } else {
-            currentLine = testLine;
-        }
-    }
-    return lines;
+    const wrappedStr = wrapTextWithNewlines(text, maxWidth, fontSize, fontWeight);
+    if (!wrappedStr) return 1;
+    return wrappedStr.split('\n').length;
 }
 
 function getTitleHeight(text: string, isRoot: boolean, hasCollapseBtn: boolean): number {
@@ -114,7 +142,7 @@ function getRowHeight(text: string, depth: number, hasLink: boolean): number {
     const availWidth = NODE_WIDTH - ROW_PADDING_X * 2 - indent - 20 - linkSpace;
     const lines = measureTextLines(text, availWidth, 12);
     const textH = lines * 12 * LINE_HEIGHT_FACTOR;
-    return Math.max(MIN_ROW_HEIGHT, textH + ROW_PAD_Y * 2);
+    return Math.max(MIN_ROW_HEIGHT, Math.ceil(textH + ROW_PAD_Y * 2));
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -221,7 +249,12 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
     const toggleSubNodeChecked = useMindMapStore((s) => s.toggleSubNodeChecked);
     const toggleSubNodeCollapse = useMindMapStore((s) => s.toggleSubNodeCollapse);
     const addSubNode = useMindMapStore((s) => s.addSubNode);
+    const addAttachmentSubNode = useMindMapStore((s) => s.addAttachmentSubNode);
     const promoteSubNode = useMindMapStore((s) => s.promoteSubNode);
+    const reorderSubNode = useMindMapStore((s) => s.reorderSubNode);
+    const selectedSubNodeId = useMindMapStore((s) => s.selectedSubNodeId);
+    const selectedSubNodeParentId = useMindMapStore((s) => s.selectedSubNodeParentId);
+    const setSelectedSubNode = useMindMapStore((s) => s.setSelectedSubNode);
     const viewport = useMindMapStore((s) => s.viewport);
     const zoomViewport = useMindMapStore((s) => s.zoomViewport);
     const setViewport = useMindMapStore((s) => s.setViewport);
@@ -231,7 +264,6 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
     const linkingSourceId = useMindMapStore((s) => s.linkingSourceId);
     const selectedLinkId = useMindMapStore((s) => s.selectedLinkId);
     const addLink = useMindMapStore((s) => s.addLink);
-    const deleteLink = useMindMapStore((s) => s.deleteLink);
     const setLinkingSource = useMindMapStore((s) => s.setLinkingSource);
     const selectLink = useMindMapStore((s) => s.selectLink);
 
@@ -243,6 +275,9 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
     const [linkingMousePos, setLinkingMousePos] = useState<{ x: number; y: number } | null>(null);
     const linkModeRef = useRef(false);
     linkModeRef.current = !!linkingSourceId;
+
+    // File drag-and-drop state
+    const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
 
     // Resize
     useEffect(() => {
@@ -566,8 +601,99 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
         return result;
     }, [links, layout, nodeDims, getEffectivePos]);
 
+    // ── File drag-and-drop handlers ────────────────────────────────────────
+    const handleFileDragOver = useCallback(
+        (e: React.DragEvent<HTMLDivElement>) => {
+            if (!e.dataTransfer.types.includes('Files')) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+
+            // Hit-test against nodes to find drop target
+            const stage = stageRef.current;
+            if (!stage) return;
+            const rect = (e.target as HTMLElement).closest('.canvas-container')?.getBoundingClientRect();
+            if (!rect) return;
+            const mouseX = (e.clientX - rect.left - stagePos.x) / stageZoom;
+            const mouseY = (e.clientY - rect.top - stagePos.y) / stageZoom;
+
+            let hitNodeId: string | null = null;
+            for (const [nodeId, info] of layout) {
+                const pos = (() => {
+                    const manual = manualPositions[nodeId];
+                    if (manual) return { x: manual.x + offsetX, y: manual.y + offsetY };
+                    return { x: info.x + offsetX, y: info.y + offsetY };
+                })();
+                const dims = nodeDims.get(nodeId);
+                if (!dims) continue;
+                if (
+                    mouseX >= pos.x && mouseX <= pos.x + NODE_WIDTH &&
+                    mouseY >= pos.y && mouseY <= pos.y + dims.totalHeight
+                ) {
+                    hitNodeId = nodeId;
+                    break;
+                }
+            }
+            setDropTargetNodeId(hitNodeId);
+        },
+        [stageRef, stagePos, stageZoom, layout, manualPositions, nodeDims, offsetX, offsetY],
+    );
+
+    const handleFileDragLeave = useCallback(() => {
+        setDropTargetNodeId(null);
+    }, []);
+
+    const handleFileDrop = useCallback(
+        (e: React.DragEvent<HTMLDivElement>) => {
+            e.preventDefault();
+            setDropTargetNodeId(null);
+            if (!e.dataTransfer.files.length) return;
+
+            // Hit-test to find target node
+            const stage = stageRef.current;
+            if (!stage) return;
+            const rect = (e.target as HTMLElement).closest('.canvas-container')?.getBoundingClientRect();
+            if (!rect) return;
+            const mouseX = (e.clientX - rect.left - stagePos.x) / stageZoom;
+            const mouseY = (e.clientY - rect.top - stagePos.y) / stageZoom;
+
+            let hitNodeId: string | null = null;
+            for (const [nodeId, info] of layout) {
+                const pos = (() => {
+                    const manual = manualPositions[nodeId];
+                    if (manual) return { x: manual.x + offsetX, y: manual.y + offsetY };
+                    return { x: info.x + offsetX, y: info.y + offsetY };
+                })();
+                const dims = nodeDims.get(nodeId);
+                if (!dims) continue;
+                if (
+                    mouseX >= pos.x && mouseX <= pos.x + NODE_WIDTH &&
+                    mouseY >= pos.y && mouseY <= pos.y + dims.totalHeight
+                ) {
+                    hitNodeId = nodeId;
+                    break;
+                }
+            }
+
+            if (!hitNodeId) return;
+
+            pushUndo();
+            for (const file of Array.from(e.dataTransfer.files)) {
+                const filePath = window.electronAPI?.getFilePath(file) || '';
+                addAttachmentSubNode(hitNodeId, filePath, file.name);
+            }
+        },
+        [stageRef, stagePos, stageZoom, layout, manualPositions, nodeDims, offsetX, offsetY, pushUndo, addAttachmentSubNode],
+    );
+
     return (
-        <div ref={containerRef} className="canvas-container" style={{ background: COLORS.canvasBg }}>
+        <div
+            ref={containerRef}
+            className="canvas-container"
+            style={{ background: COLORS.canvasBg }}
+            onDragOver={handleFileDragOver}
+            onDragLeave={handleFileDragLeave}
+            onDrop={handleFileDrop}
+        >
             <Stage
                 ref={stageRef}
                 width={dimensions.width}
@@ -748,6 +874,22 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     });
                                 }}
                             >
+                                {/* Drop target highlight */}
+                                {dropTargetNodeId === nodeId && (
+                                    <Rect
+                                        x={-4}
+                                        y={-4}
+                                        width={NODE_WIDTH + 8}
+                                        height={h + 8}
+                                        cornerRadius={BORDER_RADIUS + 3}
+                                        stroke={COLORS.edgePromoted}
+                                        strokeWidth={2.5}
+                                        fill={`${COLORS.edgePromoted}10`}
+                                        dash={[6, 4]}
+                                        listening={false}
+                                    />
+                                )}
+
                                 {/* Selection ring */}
                                 {isSelected && (
                                     <Rect
@@ -811,13 +953,14 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     y={0}
                                     width={NODE_WIDTH - ROW_PADDING_X * 2 - (node.children.length > 0 ? 20 : 0)}
                                     height={titleH}
-                                    text={node.text}
+                                    text={wrapTextWithNewlines(node.text, NODE_WIDTH - ROW_PADDING_X * 2 - (node.children.length > 0 ? 20 : 0), isRoot ? 15 : 13, isRoot ? 'bold' : '600')}
                                     fontSize={isRoot ? 15 : 13}
                                     fontFamily="Inter, sans-serif"
                                     fontStyle={isRoot ? 'bold' : '600'}
                                     fill={isRoot ? COLORS.rootText : COLORS.titleText}
                                     verticalAlign="middle"
-                                    wrap="word"
+                                    wrap="none"
+                                    lineHeight={LINE_HEIGHT_FACTOR}
                                     onClick={(e) => {
                                         if (linkingSourceId && linkingSourceId !== nodeId) return;
                                         e.cancelBubble = true;
@@ -863,11 +1006,19 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     const rowH = snDim?.height ?? MIN_ROW_HEIGHT;
                                     const indent = depth * 14;
                                     const isLastRow = rowIndex === flatSubs.length - 1;
+                                    const isAttachment = sn.type === 'attachment';
+                                    const isSubNodeSelected = selectedSubNodeId === sn.id && selectedSubNodeParentId === nodeId;
 
                                     return (
                                         <Group
                                             key={sn.id}
                                             y={rowY}
+                                            onClick={(e) => {
+                                                if (linkingSourceId && linkingSourceId !== nodeId) return;
+                                                e.cancelBubble = true;
+                                                setSelectedSubNode(nodeId, sn.id);
+                                                setSelection([nodeId]);
+                                            }}
                                             onContextMenu={(e) => {
                                                 e.evt.preventDefault();
                                                 e.cancelBubble = true;
@@ -879,87 +1030,134 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                                 });
                                             }}
                                         >
+                                            {/* Selection highlight */}
+                                            {isSubNodeSelected && (
+                                                <Rect
+                                                    x={0}
+                                                    y={0}
+                                                    width={NODE_WIDTH}
+                                                    height={rowH}
+                                                    fill={`${COLORS.selectedRing}18`}
+                                                    stroke={COLORS.selectedRing}
+                                                    strokeWidth={1.5}
+                                                    cornerRadius={isLastRow ? [0, 0, BORDER_RADIUS, BORDER_RADIUS] : 0}
+                                                    listening={false}
+                                                />
+                                            )}
+
                                             <Rect
                                                 width={NODE_WIDTH}
                                                 height={rowH}
                                                 fill={COLORS.rowBg}
                                                 cornerRadius={isLastRow ? [0, 0, BORDER_RADIUS, BORDER_RADIUS] : 0}
+                                                opacity={isSubNodeSelected ? 0 : 1}
                                             />
                                             {!isLastRow && (
                                                 <Line
                                                     points={[ROW_PADDING_X, rowH, NODE_WIDTH - ROW_PADDING_X, rowH]}
-                                                    stroke={COLORS.rowBorder}
-                                                    strokeWidth={0.5}
+                                                    stroke="#000"
+                                                    opacity={0.06}
+                                                    strokeWidth={1}
                                                     listening={false}
                                                 />
                                             )}
 
-                                            {/* Checkbox */}
-                                            <Rect
-                                                x={ROW_PADDING_X + indent}
-                                                y={ROW_PAD_Y + (12 * LINE_HEIGHT_FACTOR) / 2 - 7}
-                                                width={14}
-                                                height={14}
-                                                cornerRadius={3}
-                                                stroke={sn.checked ? COLORS.checkboxChecked : COLORS.checkboxBorder}
-                                                strokeWidth={1.5}
-                                                fill={sn.checked ? COLORS.checkboxChecked : 'transparent'}
-                                                onClick={(e) => {
-                                                    if (linkingSourceId && linkingSourceId !== nodeId) return;
-                                                    e.cancelBubble = true;
-                                                    pushUndo();
-                                                    toggleSubNodeChecked(nodeId, sn.id);
-                                                }}
-                                                onMouseUp={(e) => {
-                                                    if (linkingSourceId && linkingSourceId !== nodeId) return;
-                                                }}
-                                            />
-                                            {sn.checked && (
-                                                <Text
+                                            {isAttachment ? (
+                                                /* ── Attachment icon (paperclip) ── */
+                                                <Path
                                                     x={ROW_PADDING_X + indent}
                                                     y={ROW_PAD_Y + (12 * LINE_HEIGHT_FACTOR) / 2 - 7}
-                                                    width={14}
-                                                    height={14}
-                                                    text="✓"
-                                                    fontSize={10}
-                                                    fontStyle="bold"
-                                                    fill="#fff"
-                                                    align="center"
-                                                    verticalAlign="middle"
+                                                    data="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"
+                                                    fill={COLORS.edgePromoted}
+                                                    scaleX={0.58}
+                                                    scaleY={0.58}
                                                     listening={false}
                                                 />
+                                            ) : (
+                                                /* ── Checkbox ── */
+                                                <>
+                                                    <Rect
+                                                        x={ROW_PADDING_X + indent}
+                                                        y={ROW_PAD_Y + (12 * LINE_HEIGHT_FACTOR) / 2 - 7}
+                                                        width={14}
+                                                        height={14}
+                                                        cornerRadius={3}
+                                                        stroke={sn.checked ? COLORS.checkboxChecked : COLORS.checkboxBorder}
+                                                        strokeWidth={1.5}
+                                                        fill={sn.checked ? COLORS.checkboxChecked : 'transparent'}
+                                                        onClick={(e) => {
+                                                            if (linkingSourceId && linkingSourceId !== nodeId) return;
+                                                            e.cancelBubble = true;
+                                                            pushUndo();
+                                                            toggleSubNodeChecked(nodeId, sn.id);
+                                                        }}
+                                                        onMouseUp={(e) => {
+                                                            if (linkingSourceId && linkingSourceId !== nodeId) return;
+                                                        }}
+                                                    />
+                                                    {sn.checked && (
+                                                        <Text
+                                                            x={ROW_PADDING_X + indent}
+                                                            y={ROW_PAD_Y + (12 * LINE_HEIGHT_FACTOR) / 2 - 7}
+                                                            width={14}
+                                                            height={14}
+                                                            text="✓"
+                                                            fontSize={10}
+                                                            fontStyle="bold"
+                                                            fill="#fff"
+                                                            align="center"
+                                                            verticalAlign="middle"
+                                                            listening={false}
+                                                        />
+                                                    )}
+                                                </>
                                             )}
 
-                                            {/* SubNode text */}
-                                            <Text
+                                            {/* SubNode text container */}
+                                            <Group
                                                 x={ROW_PADDING_X + indent + 20}
                                                 y={ROW_PAD_Y}
-                                                width={NODE_WIDTH - ROW_PADDING_X * 2 - indent - 20 - (sn.childNodeId ? 16 : 0)}
-                                                height={rowH - ROW_PAD_Y * 2}
-                                                text={sn.text}
-                                                fontSize={12}
-                                                fontFamily="Inter, sans-serif"
-                                                fill={sn.checked ? COLORS.rowTextChecked : COLORS.rowText}
-                                                textDecoration={sn.checked ? 'line-through' : ''}
-                                                verticalAlign="top"
-                                                wrap="word"
-                                                onClick={(e) => {
-                                                    if (linkingSourceId && linkingSourceId !== nodeId) return;
-                                                    e.cancelBubble = true;
-                                                    setSelection([nodeId]);
-                                                }}
-                                                onMouseUp={(e) => {
-                                                    if (linkingSourceId && linkingSourceId !== nodeId) return;
-                                                }}
-                                                onDblClick={(e) => {
-                                                    e.cancelBubble = true;
-                                                    setEditingNodeId(nodeId);
-                                                    setEditingSubNodeId(sn.id);
-                                                }}
-                                            />
+                                            >
+                                                <Text
+                                                    width={NODE_WIDTH - ROW_PADDING_X * 2 - indent - 20 - (sn.childNodeId ? 16 : 0)}
+                                                    height={rowH - ROW_PAD_Y * 2}
+                                                    text={wrapTextWithNewlines(sn.text, NODE_WIDTH - ROW_PADDING_X * 2 - indent - 20 - (sn.childNodeId ? 16 : 0), 12)}
+                                                    fontSize={12}
+                                                    fontFamily="Inter, sans-serif"
+                                                    fill={isAttachment ? COLORS.edgePromoted : (sn.checked ? COLORS.rowTextChecked : COLORS.rowText)}
+                                                    textDecoration={isAttachment ? 'underline' : (sn.checked ? 'line-through' : '')}
+                                                    verticalAlign="top"
+                                                    wrap="none"
+                                                    lineHeight={LINE_HEIGHT_FACTOR}
+                                                    onClick={(e) => {
+                                                        if (e.evt.button === 0 && isAttachment && sn.filePath) {
+                                                            window.electronAPI?.openPath(sn.filePath);
+                                                        }
+                                                        // Bubbles to Group for selection
+                                                    }}
+                                                    onDblClick={(e) => {
+                                                        if (isAttachment) return;
+                                                        e.cancelBubble = true;
+                                                        setEditingNodeId(nodeId);
+                                                        setEditingSubNodeId(sn.id);
+                                                    }}
+                                                    onMouseEnter={(e) => {
+                                                        if (isAttachment) {
+                                                            const c = e.target.getStage()?.container();
+                                                            if (c) c.style.cursor = 'pointer';
+                                                        }
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        if (isAttachment) {
+                                                            const c = e.target.getStage()?.container();
+                                                            if (c) c.style.cursor = 'default';
+                                                        }
+                                                    }}
+                                                />
+                                            </Group>
 
-                                            {/* Link indicator / collapse toggle */}
-                                            {sn.childNodeId && (
+                                            {/* Link indicator / collapse toggle (checklist only) */}
+                                            {!isAttachment && sn.childNodeId && (
                                                 <Group
                                                     x={NODE_WIDTH - ROW_PADDING_X - 8}
                                                     y={ROW_PAD_Y + (12 * LINE_HEIGHT_FACTOR) / 2 - 6}
@@ -993,8 +1191,8 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                                 </Group>
                                             )}
 
-                                            {/* Promote button */}
-                                            {!sn.childNodeId && (
+                                            {/* Promote button (checklist only) */}
+                                            {!isAttachment && !sn.childNodeId && (
                                                 <Group
                                                     x={NODE_WIDTH - 8}
                                                     y={ROW_PAD_Y + (12 * LINE_HEIGHT_FACTOR) / 2 - 8}

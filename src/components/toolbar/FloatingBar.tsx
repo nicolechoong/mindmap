@@ -121,12 +121,6 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
                     ⊞
                 </button>
             </div>
-
-            <div className="fab-divider" />
-
-            <button className="fab-btn" title="Toggle Theme" onClick={onToggleTheme}>
-                {theme === 'dark' ? '☀' : '🌙'}
-            </button>
         </div>
     );
 }

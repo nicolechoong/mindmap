@@ -245,6 +245,52 @@ body,
   cursor: default;
 }
 
+.ctx-palette {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px 4px;
+  justify-content: center;
+}
+
+.ctx-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  outline: none;
+}
+
+.ctx-swatch:hover {
+  transform: scale(1.2);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.ctx-swatch-active {
+  border-color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.2);
+}
+
+.ctx-swatch-check {
+  color: #fff;
+  font-size: 11px;
+  font-weight: bold;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.ctx-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 4px 8px;
+}
+
 /* ── Shortcuts Modal ────────────────────────────────────────────────────── */
 
 .shortcuts-overlay {

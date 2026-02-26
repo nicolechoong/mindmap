@@ -4,6 +4,7 @@ import { nanoid } from 'nanoid';
 import type {
     MindMapNode,
     MindMapEdge,
+    MindMapLink,
     SubNode,
     NodeStyle,
     EdgeStyle,
@@ -74,6 +75,7 @@ function createSubNode(text: string): SubNode {
         id: nanoid(),
         text,
         checked: false,
+        collapsed: false,
         subNodes: [],
         childNodeId: null,
     };
@@ -155,9 +157,12 @@ export interface MindMapStore {
     // State
     nodes: Record<string, MindMapNode>;
     edges: Record<string, MindMapEdge>;
+    links: Record<string, MindMapLink>;
     rootIds: string[];
     manualPositions: Record<string, { x: number; y: number }>;
     selectedNodeIds: string[];
+    linkingSourceId: string | null;
+    selectedLinkId: string | null;
     viewport: ViewportState;
     title: string;
 
@@ -183,8 +188,15 @@ export interface MindMapStore {
     deleteSubNode: (nodeId: string, subNodeId: string) => void;
     updateSubNodeText: (nodeId: string, subNodeId: string, text: string) => void;
     toggleSubNodeChecked: (nodeId: string, subNodeId: string) => void;
+    toggleSubNodeCollapse: (nodeId: string, subNodeId: string) => void;
     promoteSubNode: (nodeId: string, subNodeId: string) => string | null;
     demoteNode: (spawnedNodeId: string) => void;
+
+    // Links
+    addLink: (sourceId: string, targetId: string) => string;
+    deleteLink: (linkId: string) => void;
+    setLinkingSource: (nodeId: string | null) => void;
+    selectLink: (linkId: string | null) => void;
 
     // Selection
     setSelection: (nodeIds: string[]) => void;
@@ -215,9 +227,12 @@ function createInitialState() {
     return {
         nodes: { [rootNode.id]: rootNode },
         edges: {} as Record<string, MindMapEdge>,
+        links: {} as Record<string, MindMapLink>,
         rootIds: [rootNode.id],
         manualPositions: {} as Record<string, { x: number; y: number }>,
         selectedNodeIds: [] as string[],
+        linkingSourceId: null as string | null,
+        selectedLinkId: null as string | null,
         viewport: { x: 0, y: 0, zoom: 1 },
         title: 'Untitled Mind Map',
         undoStack: [] as string[],
@@ -332,7 +347,7 @@ export const useMindMapStore = create<MindMapStore>()(
                     }
                 }
 
-                // Remove all nodes and their edges
+                // Remove all nodes, edges, and links
                 for (const id of subtreeIds) {
                     delete state.nodes[id];
                 }
@@ -342,11 +357,20 @@ export const useMindMapStore = create<MindMapStore>()(
                         delete state.edges[edgeId];
                     }
                 }
+                for (const linkId of Object.keys(state.links)) {
+                    const link = state.links[linkId];
+                    if (subtreeIds.includes(link.sourceId) || subtreeIds.includes(link.targetId)) {
+                        delete state.links[linkId];
+                    }
+                }
 
                 // Clean selection
                 state.selectedNodeIds = state.selectedNodeIds.filter(
                     (id) => !subtreeIds.includes(id),
                 );
+                if (state.selectedLinkId && !state.links[state.selectedLinkId]) {
+                    state.selectedLinkId = null;
+                }
             });
         },
 
@@ -520,6 +544,15 @@ export const useMindMapStore = create<MindMapStore>()(
             });
         },
 
+        toggleSubNodeCollapse: (nodeId, subNodeId) => {
+            set((state) => {
+                const node = state.nodes[nodeId];
+                if (!node) return;
+                const subNode = findSubNode(node.subNodes, subNodeId);
+                if (subNode && subNode.childNodeId) subNode.collapsed = !subNode.collapsed;
+            });
+        },
+
         promoteSubNode: (nodeId, subNodeId) => {
             let newNodeId: string | null = null;
             set((state) => {
@@ -584,6 +617,43 @@ export const useMindMapStore = create<MindMapStore>()(
             });
         },
 
+        // ── Links ─────────────────────────────────────────────────────────────
+
+        addLink: (sourceId, targetId) => {
+            const id = nanoid();
+            set((state) => {
+                // Don't create duplicate links or self-links
+                if (sourceId === targetId) return;
+                const exists = Object.values(state.links).some(
+                    (l) => (l.sourceId === sourceId && l.targetId === targetId) ||
+                        (l.sourceId === targetId && l.targetId === sourceId),
+                );
+                if (exists) return;
+                state.links[id] = { id, sourceId, targetId };
+            });
+            return id;
+        },
+
+        deleteLink: (linkId) => {
+            set((state) => {
+                delete state.links[linkId];
+                if (state.selectedLinkId === linkId) state.selectedLinkId = null;
+            });
+        },
+
+        setLinkingSource: (nodeId) => {
+            set((state) => {
+                state.linkingSourceId = nodeId;
+            });
+        },
+
+        selectLink: (linkId) => {
+            set((state) => {
+                state.selectedLinkId = linkId;
+                if (linkId) state.selectedNodeIds = [];
+            });
+        },
+
         // ── Selection ───────────────────────────────────────────────────────
 
         setSelection: (nodeIds) => {
@@ -642,12 +712,15 @@ export const useMindMapStore = create<MindMapStore>()(
             set((state) => {
                 state.nodes = doc.nodes;
                 state.edges = doc.edges;
+                state.links = doc.links ?? {};
                 // Support legacy single-root docs
                 state.rootIds = doc.rootIds ?? ((doc as any).rootId ? [(doc as any).rootId] : []);
                 state.manualPositions = {};
                 state.title = doc.title;
                 state.viewport = doc.viewport;
                 state.selectedNodeIds = [];
+                state.linkingSourceId = null;
+                state.selectedLinkId = null;
                 state.undoStack = [];
                 state.redoStack = [];
             });
@@ -661,6 +734,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 rootIds: [...state.rootIds],
                 nodes: JSON.parse(JSON.stringify(state.nodes)),
                 edges: JSON.parse(JSON.stringify(state.edges)),
+                links: JSON.parse(JSON.stringify(state.links)),
                 theme: {
                     name: 'Default Dark',
                     mode: 'dark',

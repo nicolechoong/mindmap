@@ -74,9 +74,22 @@ function buildLayoutTree(
 
     const height = nodeHeights?.get(nodeId) ?? calcNodeHeight(node, config);
 
+    // Collect IDs of children whose promoter subnode is collapsed
+    const collapsedChildIds = new Set<string>();
+    const gatherCollapsed = (subs: typeof node.subNodes) => {
+        for (const sn of subs) {
+            if (sn.childNodeId && sn.collapsed) {
+                collapsedChildIds.add(sn.childNodeId);
+            }
+            gatherCollapsed(sn.subNodes);
+        }
+    };
+    gatherCollapsed(node.subNodes);
+
     const children: LayoutNode[] = [];
     if (!node.collapsed) {
         for (const childId of node.children) {
+            if (collapsedChildIds.has(childId)) continue;
             const childLayout = buildLayoutTree(nodes, childId, config, nodeHeights);
             if (childLayout) children.push(childLayout);
         }

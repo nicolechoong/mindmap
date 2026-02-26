@@ -38,9 +38,7 @@ function getColors(theme: 'light' | 'dark') {
             connectorBg: '#3a3a50',
             canvasBg: '#0f0f14',
             addBtnText: '#555570',
-            rootBg: '#6c63ff',
             rootText: '#ffffff',
-            rootBorder: '#5a52e0',
         };
     }
     return {
@@ -60,10 +58,17 @@ function getColors(theme: 'light' | 'dark') {
         connectorBg: '#d8d8e0',
         canvasBg: '#f4f4f8',
         addBtnText: '#999',
-        rootBg: '#6c63ff',
         rootText: '#ffffff',
-        rootBorder: '#5a52e0',
     };
+}
+
+// Derive a darker shade for borders from a hex color
+function darkenHex(hex: string, amount: number = 0.15): string {
+    const n = parseInt(hex.replace('#', ''), 16);
+    const r = Math.max(0, Math.round(((n >> 16) & 0xff) * (1 - amount)));
+    const g = Math.max(0, Math.round(((n >> 8) & 0xff) * (1 - amount)));
+    const b = Math.max(0, Math.round((n & 0xff) * (1 - amount)));
+    return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
 }
 
 // ── Text Measurement ──────────────────────────────────────────────────────
@@ -214,6 +219,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
     const updateNodeText = useMindMapStore((s) => s.updateNodeText);
     const updateSubNodeText = useMindMapStore((s) => s.updateSubNodeText);
     const toggleSubNodeChecked = useMindMapStore((s) => s.toggleSubNodeChecked);
+    const toggleSubNodeCollapse = useMindMapStore((s) => s.toggleSubNodeCollapse);
     const addSubNode = useMindMapStore((s) => s.addSubNode);
     const promoteSubNode = useMindMapStore((s) => s.promoteSubNode);
     const viewport = useMindMapStore((s) => s.viewport);
@@ -221,9 +227,22 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
     const setViewport = useMindMapStore((s) => s.setViewport);
     const manualPositions = useMindMapStore((s) => s.manualPositions);
     const setNodePosition = useMindMapStore((s) => s.setNodePosition);
+    const links = useMindMapStore((s) => s.links);
+    const linkingSourceId = useMindMapStore((s) => s.linkingSourceId);
+    const selectedLinkId = useMindMapStore((s) => s.selectedLinkId);
+    const addLink = useMindMapStore((s) => s.addLink);
+    const deleteLink = useMindMapStore((s) => s.deleteLink);
+    const setLinkingSource = useMindMapStore((s) => s.setLinkingSource);
+    const selectLink = useMindMapStore((s) => s.selectLink);
 
     const stageZoom = viewport.zoom;
     const stagePos = { x: viewport.x, y: viewport.y };
+
+    // Link interaction state
+    const [hoveredLinkId, setHoveredLinkId] = useState<string | null>(null);
+    const [linkingMousePos, setLinkingMousePos] = useState<{ x: number; y: number } | null>(null);
+    const linkModeRef = useRef(false);
+    linkModeRef.current = !!linkingSourceId;
 
     // Resize
     useEffect(() => {
@@ -317,12 +336,17 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
         (e: Konva.KonvaEventObject<any>) => {
             if (e.target === e.target.getStage()) {
                 clearSelection();
+                selectLink(null);
                 setEditingNodeId(null);
                 setEditingSubNodeId(null);
                 setCtxMenu(null);
+                if (linkingSourceId) {
+                    setLinkingSource(null);
+                    setLinkingMousePos(null);
+                }
             }
         },
-        [clearSelection],
+        [clearSelection, selectLink, linkingSourceId, setLinkingSource],
     );
 
     // Inline editing
@@ -370,9 +394,9 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
         [draggingPos, manualPositions, layout, offsetX, offsetY],
     );
 
-    // Build edges using effective positions
+    // Build edges using effective positions with adaptive anchor selection
     const edgeLines = useMemo(() => {
-        const lines: { key: string; points: number[]; color: string; width: number }[] = [];
+        const lines: { key: string; points: number[]; color: string; width: number; targetId: string; entrySide: 'left' | 'right' | 'top' | 'bottom' }[] = [];
 
         for (const edge of Object.values(edges)) {
             const sourceInfo = layout.get(edge.sourceId);
@@ -387,34 +411,160 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
             const sPos = getEffectivePos(edge.sourceId);
             const tPos = getEffectivePos(edge.targetId);
 
-            let sy = sPos.y + sourceInfo.height / 2;
+            const sW = sourceInfo.width;
+            const sH = sourceInfo.height;
+            const tW = targetInfo.width;
+            const tH = targetInfo.height;
+            const tTitleH = targetDims?.titleHeight ?? MIN_TITLE_HEIGHT;
+
+            // Source center Y (may be overridden for promoted edges)
+            let sCenterY = sPos.y + sH / 2;
             let isPromoted = false;
 
             if (targetNode?.parentSubNodeId && sourceNode && sourceDims) {
                 const snDim = sourceDims.subNodeDims.find(d => d.id === targetNode.parentSubNodeId);
                 if (snDim) {
-                    sy = sPos.y + sourceDims.titleHeight + snDim.yOffset + snDim.height / 2;
+                    sCenterY = sPos.y + sourceDims.titleHeight + snDim.yOffset + snDim.height / 2;
                     isPromoted = true;
                 }
             }
 
-            const tTitleH = targetDims?.titleHeight ?? MIN_TITLE_HEIGHT;
-            const sx = sPos.x + sourceInfo.width;
-            const tx = tPos.x;
-            const ty = tPos.y + tTitleH / 2;
-            const cpx1 = sx + 40;
-            const cpx2 = tx - 40;
+            // Target center
+            const tCenterX = tPos.x + tW / 2;
+            const tCenterY = tPos.y + tH / 2;
+            // Source center X is always the horizontal middle
+            const sCenterX = sPos.x + sW / 2;
+
+            const dx = tCenterX - sCenterX;
+            const dy = tCenterY - sCenterY;
+
+            // Choose exit side for source
+            let sx: number, sy: number, sDirX: number, sDirY: number;
+            if (Math.abs(dx) >= Math.abs(dy)) {
+                // Primarily horizontal
+                if (dx >= 0) {
+                    // Child is to the right → exit right
+                    sx = sPos.x + sW; sy = sCenterY; sDirX = 1; sDirY = 0;
+                } else {
+                    // Child is to the left → exit left
+                    sx = sPos.x; sy = sCenterY; sDirX = -1; sDirY = 0;
+                }
+            } else {
+                // Primarily vertical
+                if (dy >= 0) {
+                    // Child is below → exit bottom
+                    sx = sCenterX; sy = sPos.y + sH; sDirX = 0; sDirY = 1;
+                } else {
+                    // Child is above → exit top
+                    sx = sCenterX; sy = sPos.y; sDirX = 0; sDirY = -1;
+                }
+            }
+
+            // Choose entry side for target
+            let tx: number, ty: number, tDirX: number, tDirY: number;
+            let entrySide: 'left' | 'right' | 'top' | 'bottom';
+            if (Math.abs(dx) >= Math.abs(dy)) {
+                if (dx >= 0) {
+                    // Child is to the right → enter left
+                    tx = tPos.x; ty = tPos.y + tTitleH / 2; tDirX = -1; tDirY = 0;
+                    entrySide = 'left';
+                } else {
+                    // Child is to the left → enter right
+                    tx = tPos.x + tW; ty = tPos.y + tTitleH / 2; tDirX = 1; tDirY = 0;
+                    entrySide = 'right';
+                }
+            } else {
+                if (dy >= 0) {
+                    // Child is below → enter top
+                    tx = tPos.x + tW / 2; ty = tPos.y; tDirX = 0; tDirY = -1;
+                    entrySide = 'top';
+                } else {
+                    // Child is above → enter bottom
+                    tx = tPos.x + tW / 2; ty = tPos.y + tH; tDirX = 0; tDirY = 1;
+                    entrySide = 'bottom';
+                }
+            }
+
+            // Control point offset proportional to distance, clamped
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const cp = Math.max(30, Math.min(80, dist * 0.3));
+
+            const cp1x = sx + sDirX * cp;
+            const cp1y = sy + sDirY * cp;
+            const cp2x = tx + tDirX * cp;
+            const cp2y = ty + tDirY * cp;
 
             lines.push({
                 key: edge.id,
-                points: [sx, sy, cpx1, sy, cpx2, ty, tx, ty],
+                points: [sx, sy, cp1x, cp1y, cp2x, cp2y, tx, ty],
                 color: isPromoted ? COLORS.edgePromoted : COLORS.edgeColor,
                 width: isPromoted ? 2 : 1.5,
+                targetId: edge.targetId,
+                entrySide,
             });
         }
 
         return lines;
     }, [edges, layout, nodes, nodeDims, getEffectivePos, COLORS]);
+
+    // ── Associative link lines ────────────────────────────────────────────
+    const linkLines = useMemo(() => {
+        const result: { id: string; points: number[]; midX: number; midY: number }[] = [];
+        for (const link of Object.values(links)) {
+            const sInfo = layout.get(link.sourceId);
+            const tInfo = layout.get(link.targetId);
+            if (!sInfo || !tInfo) continue;
+
+            const sDims = nodeDims.get(link.sourceId);
+            const tDims = nodeDims.get(link.targetId);
+            if (!sDims || !tDims) continue;
+
+            const sPos = getEffectivePos(link.sourceId);
+            const tPos = getEffectivePos(link.targetId);
+
+            const sW = sInfo.width, sH = sDims.totalHeight;
+            const tW = tInfo.width, tH = tDims.totalHeight;
+
+            const sCenterX = sPos.x + sW / 2, sCenterY = sPos.y + sH / 2;
+            const tCenterX = tPos.x + tW / 2, tCenterY = tPos.y + tH / 2;
+            const dx = tCenterX - sCenterX, dy = tCenterY - sCenterY;
+
+            let sx: number, sy: number, sDirX: number, sDirY: number;
+            if (Math.abs(dx) >= Math.abs(dy)) {
+                if (dx >= 0) { sx = sPos.x + sW; sy = sCenterY; sDirX = 1; sDirY = 0; }
+                else { sx = sPos.x; sy = sCenterY; sDirX = -1; sDirY = 0; }
+            } else {
+                if (dy >= 0) { sx = sCenterX; sy = sPos.y + sH; sDirX = 0; sDirY = 1; }
+                else { sx = sCenterX; sy = sPos.y; sDirX = 0; sDirY = -1; }
+            }
+
+            let tx: number, ty: number, tDirX: number, tDirY: number;
+            if (Math.abs(dx) >= Math.abs(dy)) {
+                if (dx >= 0) { tx = tPos.x; ty = tCenterY; tDirX = -1; tDirY = 0; }
+                else { tx = tPos.x + tW; ty = tCenterY; tDirX = 1; tDirY = 0; }
+            } else {
+                if (dy >= 0) { tx = tCenterX; ty = tPos.y; tDirX = 0; tDirY = -1; }
+                else { tx = tCenterX; ty = tPos.y + tH; tDirX = 0; tDirY = 1; }
+            }
+
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const cp = Math.max(30, Math.min(80, dist * 0.3));
+            const cp1x = sx + sDirX * cp, cp1y = sy + sDirY * cp;
+            const cp2x = tx + tDirX * cp, cp2y = ty + tDirY * cp;
+
+            // Bezier midpoint at t=0.5
+            const midX = 0.125 * sx + 0.375 * cp1x + 0.375 * cp2x + 0.125 * tx;
+            const midY = 0.125 * sy + 0.375 * cp1y + 0.375 * cp2y + 0.125 * ty;
+
+            result.push({
+                id: link.id,
+                points: [sx, sy, cp1x, cp1y, cp2x, cp2y, tx, ty],
+                midX,
+                midY,
+            });
+        }
+        return result;
+    }, [links, layout, nodeDims, getEffectivePos]);
 
     return (
         <div ref={containerRef} className="canvas-container" style={{ background: COLORS.canvasBg }}>
@@ -422,7 +572,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                 ref={stageRef}
                 width={dimensions.width}
                 height={dimensions.height}
-                draggable
+                draggable={!linkingSourceId}
                 scaleX={stageZoom}
                 scaleY={stageZoom}
                 x={stagePos.x}
@@ -432,6 +582,19 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                 onClick={handleStageClick}
                 onTap={handleStageClick}
                 onContextMenu={(e) => e.evt.preventDefault()}
+                onMouseMove={(e) => {
+                    if (linkingSourceId) {
+                        const stage = e.target.getStage();
+                        if (!stage) return;
+                        const pos = stage.getPointerPosition();
+                        if (pos) {
+                            setLinkingMousePos({
+                                x: (pos.x - stagePos.x) / stageZoom,
+                                y: (pos.y - stagePos.y) / stageZoom,
+                            });
+                        }
+                    }
+                }}
             >
                 <Layer>
                     {/* Edges */}
@@ -446,6 +609,69 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                             opacity={0.7}
                         />
                     ))}
+
+                    {/* Associative link lines */}
+                    {linkLines.map((ll) => {
+                        const isSelected = selectedLinkId === ll.id;
+                        const isHovered = hoveredLinkId === ll.id;
+                        return (
+                            <Group key={`link-${ll.id}`}>
+                                {/* Invisible thick hit area */}
+                                <Line
+                                    points={ll.points}
+                                    stroke="transparent"
+                                    strokeWidth={12}
+                                    bezier
+                                    lineCap="round"
+                                    onClick={(e) => {
+                                        e.cancelBubble = true;
+                                        selectLink(ll.id);
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        setHoveredLinkId(ll.id);
+                                        const c = e.target.getStage()?.container();
+                                        if (c) c.style.cursor = 'pointer';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        setHoveredLinkId(null);
+                                        const c = e.target.getStage()?.container();
+                                        if (c) c.style.cursor = 'default';
+                                    }}
+                                />
+                                {/* Visible dotted line */}
+                                <Line
+                                    points={ll.points}
+                                    stroke={isSelected ? COLORS.edgePromoted : COLORS.edgeColor}
+                                    strokeWidth={isSelected ? 2 : 1.5}
+                                    dash={[6, 4]}
+                                    bezier
+                                    lineCap="round"
+                                    opacity={isHovered ? 1 : 0.6}
+                                    listening={false}
+                                />
+                            </Group>
+                        );
+                    })}
+
+                    {/* Link mode preview line */}
+                    {linkingSourceId && linkingMousePos && (() => {
+                        const sInfo = layout.get(linkingSourceId);
+                        const sDims = nodeDims.get(linkingSourceId);
+                        if (!sInfo || !sDims) return null;
+                        const sPos = getEffectivePos(linkingSourceId);
+                        const sCX = sPos.x + sInfo.width / 2;
+                        const sCY = sPos.y + sDims.totalHeight / 2;
+                        return (
+                            <Line
+                                points={[sCX, sCY, linkingMousePos.x, linkingMousePos.y]}
+                                stroke={COLORS.edgePromoted}
+                                strokeWidth={1.5}
+                                dash={[6, 4]}
+                                opacity={0.5}
+                                listening={false}
+                            />
+                        );
+                    })()}
 
                     {/* Nodes */}
                     {Array.from(layout.entries()).map(([nodeId, info]) => {
@@ -466,9 +692,34 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                 key={nodeId}
                                 x={x}
                                 y={y}
-                                draggable
+                                draggable={!linkingSourceId}
+                                onClick={(e) => {
+                                    if (linkingSourceId && linkingSourceId !== nodeId) {
+                                        e.cancelBubble = true;
+                                        pushUndo();
+                                        addLink(linkingSourceId, nodeId);
+                                        setLinkingSource(null);
+                                        setLinkingMousePos(null);
+                                    }
+                                }}
+                                onMouseUp={(e) => {
+                                    if (linkingSourceId && linkingSourceId !== nodeId) {
+                                        e.cancelBubble = true;
+                                        pushUndo();
+                                        addLink(linkingSourceId, nodeId);
+                                        setLinkingSource(null);
+                                        setLinkingMousePos(null);
+                                    }
+                                }}
                                 onDragStart={(e) => {
                                     e.cancelBubble = true;
+                                    // Shift+drag = start linking
+                                    if (e.evt.shiftKey) {
+                                        e.target.stopDrag();
+                                        pushUndo();
+                                        setLinkingSource(nodeId);
+                                        return;
+                                    }
                                     pushUndo();
                                 }}
                                 onDragMove={(e) => {
@@ -531,7 +782,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     width={NODE_WIDTH}
                                     height={h}
                                     fill={COLORS.nodeBg}
-                                    stroke={isRoot ? COLORS.rootBorder : COLORS.nodeBorder}
+                                    stroke={isRoot ? darkenHex(node.style.fillColor) : COLORS.nodeBorder}
                                     strokeWidth={1}
                                     cornerRadius={BORDER_RADIUS}
                                 />
@@ -540,7 +791,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                 <Rect
                                     width={NODE_WIDTH}
                                     height={titleH}
-                                    fill={isRoot ? COLORS.rootBg : COLORS.titleBg}
+                                    fill={isRoot ? node.style.fillColor : COLORS.titleBg}
                                     cornerRadius={
                                         flatSubs.length > 0
                                             ? [BORDER_RADIUS, BORDER_RADIUS, 0, 0]
@@ -550,7 +801,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                 {flatSubs.length > 0 && (
                                     <Line
                                         points={[0, titleH, NODE_WIDTH, titleH]}
-                                        stroke={isRoot ? COLORS.rootBorder : COLORS.nodeBorder}
+                                        stroke={isRoot ? darkenHex(node.style.fillColor) : COLORS.nodeBorder}
                                         strokeWidth={1}
                                         listening={false}
                                     />
@@ -568,8 +819,12 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     verticalAlign="middle"
                                     wrap="word"
                                     onClick={(e) => {
+                                        if (linkingSourceId && linkingSourceId !== nodeId) return;
                                         e.cancelBubble = true;
                                         setSelection([nodeId]);
+                                    }}
+                                    onMouseUp={(e) => {
+                                        if (linkingSourceId && linkingSourceId !== nodeId) return;
                                     }}
                                     onDblClick={(e) => {
                                         e.cancelBubble = true;
@@ -642,7 +897,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                             {/* Checkbox */}
                                             <Rect
                                                 x={ROW_PADDING_X + indent}
-                                                y={(rowH - 14) / 2}
+                                                y={ROW_PAD_Y + (12 * LINE_HEIGHT_FACTOR) / 2 - 7}
                                                 width={14}
                                                 height={14}
                                                 cornerRadius={3}
@@ -650,15 +905,19 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                                 strokeWidth={1.5}
                                                 fill={sn.checked ? COLORS.checkboxChecked : 'transparent'}
                                                 onClick={(e) => {
+                                                    if (linkingSourceId && linkingSourceId !== nodeId) return;
                                                     e.cancelBubble = true;
                                                     pushUndo();
                                                     toggleSubNodeChecked(nodeId, sn.id);
+                                                }}
+                                                onMouseUp={(e) => {
+                                                    if (linkingSourceId && linkingSourceId !== nodeId) return;
                                                 }}
                                             />
                                             {sn.checked && (
                                                 <Text
                                                     x={ROW_PADDING_X + indent}
-                                                    y={(rowH - 14) / 2}
+                                                    y={ROW_PAD_Y + (12 * LINE_HEIGHT_FACTOR) / 2 - 7}
                                                     width={14}
                                                     height={14}
                                                     text="✓"
@@ -674,19 +933,23 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                             {/* SubNode text */}
                                             <Text
                                                 x={ROW_PADDING_X + indent + 20}
-                                                y={0}
+                                                y={ROW_PAD_Y}
                                                 width={NODE_WIDTH - ROW_PADDING_X * 2 - indent - 20 - (sn.childNodeId ? 16 : 0)}
-                                                height={rowH}
+                                                height={rowH - ROW_PAD_Y * 2}
                                                 text={sn.text}
                                                 fontSize={12}
                                                 fontFamily="Inter, sans-serif"
                                                 fill={sn.checked ? COLORS.rowTextChecked : COLORS.rowText}
                                                 textDecoration={sn.checked ? 'line-through' : ''}
-                                                verticalAlign="middle"
+                                                verticalAlign="top"
                                                 wrap="word"
                                                 onClick={(e) => {
+                                                    if (linkingSourceId && linkingSourceId !== nodeId) return;
                                                     e.cancelBubble = true;
                                                     setSelection([nodeId]);
+                                                }}
+                                                onMouseUp={(e) => {
+                                                    if (linkingSourceId && linkingSourceId !== nodeId) return;
                                                 }}
                                                 onDblClick={(e) => {
                                                     e.cancelBubble = true;
@@ -695,27 +958,54 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                                 }}
                                             />
 
-                                            {/* Link indicator */}
+                                            {/* Link indicator / collapse toggle */}
                                             {sn.childNodeId && (
-                                                <Circle
-                                                    x={NODE_WIDTH - ROW_PADDING_X}
-                                                    y={rowH / 2}
-                                                    radius={4}
-                                                    fill={COLORS.edgePromoted}
-                                                    opacity={0.8}
-                                                    listening={false}
-                                                />
+                                                <Group
+                                                    x={NODE_WIDTH - ROW_PADDING_X - 8}
+                                                    y={ROW_PAD_Y + (12 * LINE_HEIGHT_FACTOR) / 2 - 6}
+                                                    onClick={(e) => {
+                                                        if (linkingSourceId && linkingSourceId !== nodeId) return;
+                                                        e.cancelBubble = true;
+                                                        toggleSubNodeCollapse(nodeId, sn.id);
+                                                    }}
+                                                    onMouseUp={(e) => {
+                                                        if (linkingSourceId && linkingSourceId !== nodeId) return;
+                                                    }}
+                                                    onMouseEnter={(e) => {
+                                                        const c = e.target.getStage()?.container();
+                                                        if (c) c.style.cursor = 'pointer';
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        const c = e.target.getStage()?.container();
+                                                        if (c) c.style.cursor = 'default';
+                                                    }}
+                                                >
+                                                    <Rect width={12} height={12} fill="transparent" />
+                                                    <Text
+                                                        width={12}
+                                                        height={12}
+                                                        text={sn.collapsed ? '▸' : '▾'}
+                                                        fontSize={11}
+                                                        fill={COLORS.edgePromoted}
+                                                        align="center"
+                                                        verticalAlign="middle"
+                                                    />
+                                                </Group>
                                             )}
 
                                             {/* Promote button */}
                                             {!sn.childNodeId && (
                                                 <Group
                                                     x={NODE_WIDTH - 8}
-                                                    y={rowH / 2 - 8}
+                                                    y={ROW_PAD_Y + (12 * LINE_HEIGHT_FACTOR) / 2 - 8}
                                                     onClick={(e) => {
+                                                        if (linkingSourceId && linkingSourceId !== nodeId) return;
                                                         e.cancelBubble = true;
                                                         pushUndo();
                                                         promoteSubNode(nodeId, sn.id);
+                                                    }}
+                                                    onMouseUp={(e) => {
+                                                        if (linkingSourceId && linkingSourceId !== nodeId) return;
                                                     }}
                                                     onMouseEnter={(e) => {
                                                         const c = e.target.getStage()?.container();
@@ -742,26 +1032,38 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     );
                                 })}
 
-                                {/* Left connector */}
-                                {!rootIds.includes(nodeId) && (
-                                    <Circle
-                                        x={0}
-                                        y={titleH / 2}
-                                        radius={CONNECTOR_RADIUS}
-                                        fill={COLORS.connectorBg}
-                                        stroke={COLORS.nodeBorder}
-                                        strokeWidth={1}
-                                        listening={false}
-                                    />
-                                )}
+                                {/* Connector dot on edge entry side */}
+                                {!rootIds.includes(nodeId) && (() => {
+                                    const edgeLine = edgeLines.find(l => l.targetId === nodeId);
+                                    const side = edgeLine?.entrySide ?? 'left';
+                                    let cx = 0, cy = titleH / 2;
+                                    if (side === 'right') { cx = NODE_WIDTH; cy = titleH / 2; }
+                                    else if (side === 'top') { cx = NODE_WIDTH / 2; cy = 0; }
+                                    else if (side === 'bottom') { cx = NODE_WIDTH / 2; cy = h; }
+                                    return (
+                                        <Circle
+                                            x={cx}
+                                            y={cy}
+                                            radius={CONNECTOR_RADIUS}
+                                            fill={COLORS.connectorBg}
+                                            stroke={COLORS.nodeBorder}
+                                            strokeWidth={1}
+                                            listening={false}
+                                        />
+                                    );
+                                })()}
 
                                 {/* Add item button */}
                                 <Group
                                     y={h - 2}
                                     onClick={(e) => {
+                                        if (linkingSourceId && linkingSourceId !== nodeId) return;
                                         e.cancelBubble = true;
                                         pushUndo();
                                         addSubNode(nodeId);
+                                    }}
+                                    onMouseUp={(e) => {
+                                        if (linkingSourceId && linkingSourceId !== nodeId) return;
                                     }}
                                     onMouseEnter={(e) => {
                                         const c = e.target.getStage()?.container();
@@ -840,7 +1142,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                             fontWeight: isRoot ? 700 : 600,
                             lineHeight: `${LINE_HEIGHT_FACTOR}`,
                             color: isRoot ? COLORS.rootText : COLORS.titleText,
-                            background: isRoot ? COLORS.rootBg : COLORS.titleBg,
+                            background: isRoot ? (nodes[editingNodeId]?.style.fillColor ?? '#6c63ff') : COLORS.titleBg,
                             border: `2px solid ${COLORS.selectedRing}`,
                             borderRadius: `${BORDER_RADIUS * stageZoom}px`,
                             outline: 'none',

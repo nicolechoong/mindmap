@@ -1,6 +1,17 @@
 import { useMindMapStore } from '../../store/store';
 import type { SubNode } from '../../types';
 
+const ROOT_PALETTE = [
+    '#6c63ff', // Indigo (default)
+    '#3b82f6', // Blue
+    '#06b6d4', // Cyan
+    '#10b981', // Emerald
+    '#f59e0b', // Amber
+    '#f97316', // Orange
+    '#ef4444', // Red
+    '#ec4899', // Pink
+];
+
 interface ContextMenuProps {
     x: number;
     y: number;
@@ -13,7 +24,6 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuPro
     const nodes = useMindMapStore((s) => s.nodes);
     const rootIds = useMindMapStore((s) => s.rootIds);
     const addChildNode = useMindMapStore((s) => s.addChildNode);
-    const addRootNode = useMindMapStore((s) => s.addRootNode);
     const addSiblingNode = useMindMapStore((s) => s.addSiblingNode);
     const deleteNode = useMindMapStore((s) => s.deleteNode);
     const addSubNode = useMindMapStore((s) => s.addSubNode);
@@ -23,12 +33,21 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuPro
     const toggleCollapse = useMindMapStore((s) => s.toggleCollapse);
     const pushUndo = useMindMapStore((s) => s.pushUndo);
     const setSelection = useMindMapStore((s) => s.setSelection);
+    const updateNodeStyle = useMindMapStore((s) => s.updateNodeStyle);
+    const links = useMindMapStore((s) => s.links);
+    const setLinkingSource = useMindMapStore((s) => s.setLinkingSource);
+    const deleteLink = useMindMapStore((s) => s.deleteLink);
 
     const node = nodes[nodeId];
     if (!node) return null;
 
     const isRoot = rootIds.includes(nodeId);
     const canDeleteRoot = isRoot && rootIds.length > 1;
+
+    // Find links involving this node
+    const nodeLinks = Object.values(links).filter(
+        (l) => l.sourceId === nodeId || l.targetId === nodeId,
+    );
 
     const findSn = (subs: SubNode[], id: string): SubNode | null => {
         for (const sn of subs) {
@@ -96,13 +115,20 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuPro
             });
         }
         items.push({
-            label: '⊕ Add Root Node',
-            action: () => {
-                pushUndo();
-                const newId = addRootNode();
-                if (newId) setSelection([newId]);
-            },
+            label: '🔗 Link to…',
+            action: () => { setLinkingSource(nodeId); },
         });
+        // Show unlink items for each existing link
+        for (const link of nodeLinks) {
+            const otherId = link.sourceId === nodeId ? link.targetId : link.sourceId;
+            const otherNode = nodes[otherId];
+            const otherName = otherNode ? otherNode.text.slice(0, 20) : otherId;
+            items.push({
+                label: `✕ Unlink from ${otherName}`,
+                action: () => { pushUndo(); deleteLink(link.id); },
+                danger: true,
+            });
+        }
         if (!isRoot || canDeleteRoot) {
             items.push({
                 label: '✕ Delete Node',
@@ -121,6 +147,28 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuPro
         <>
             <div className="ctx-backdrop" onClick={onClose} />
             <div className="ctx-menu" style={{ left: x, top: y }}>
+                {/* Color palette for root nodes */}
+                {isRoot && !subNodeId && (
+                    <div className="ctx-palette">
+                        {ROOT_PALETTE.map((color) => (
+                            <button
+                                key={color}
+                                className={`ctx-swatch${node.style.fillColor === color ? ' ctx-swatch-active' : ''}`}
+                                style={{ background: color }}
+                                onClick={() => {
+                                    pushUndo();
+                                    updateNodeStyle(nodeId, { fillColor: color });
+                                }}
+                                title={color}
+                            >
+                                {node.style.fillColor === color && (
+                                    <span className="ctx-swatch-check">✓</span>
+                                )}
+                            </button>
+                        ))}
+                    </div>
+                )}
+                {isRoot && !subNodeId && <div className="ctx-divider" />}
                 {items.map((item, i) => (
                     <button
                         key={i}

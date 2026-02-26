@@ -55,6 +55,22 @@ export function useKeyboard() {
                 return;
             }
 
+            // ── Link operations ──────────────────────────────────────────────
+            if (e.key === 'Escape') {
+                if (store.linkingSourceId) {
+                    store.setLinkingSource(null);
+                }
+                return;
+            }
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (store.selectedLinkId) {
+                    e.preventDefault();
+                    store.pushUndo();
+                    store.deleteLink(store.selectedLinkId);
+                    return;
+                }
+            }
+
             // ── Node operations (require selection) ──────────────────────────
             if (!firstSelected) return;
 

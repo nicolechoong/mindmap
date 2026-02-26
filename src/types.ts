@@ -12,6 +12,7 @@ export interface SubNode {
     id: string;
     text: string;
     checked: boolean;
+    collapsed: boolean;
     subNodes: SubNode[];
     childNodeId: string | null;
 }
@@ -56,6 +57,14 @@ export interface MindMapEdge {
     style: EdgeStyle;
 }
 
+// ── Associative Links ─────────────────────────────────────────────────────
+
+export interface MindMapLink {
+    id: string;
+    sourceId: string;
+    targetId: string;
+}
+
 // ── Theme ─────────────────────────────────────────────────────────────────
 
 export interface ThemeConfig {
@@ -83,6 +92,7 @@ export interface MindMapDocument {
     rootIds: string[];
     nodes: Record<string, MindMapNode>;
     edges: Record<string, MindMapEdge>;
+    links: Record<string, MindMapLink>;
     theme: ThemeConfig;
     viewport: { x: number; y: number; zoom: number };
     createdAt: string;

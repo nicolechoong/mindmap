@@ -12,6 +12,7 @@ import type {
     ViewportState,
     MindMapDocument,
 } from '../types';
+import { computeLayout } from '../layout/layout';
 
 // ── Default styles ────────────────────────────────────────────────────────
 
@@ -188,6 +189,7 @@ export interface MindMapStore {
     reparentNode: (nodeId: string, newParentId: string) => void;
     setNodePosition: (nodeId: string, x: number, y: number) => void;
     tidyUp: () => void;
+    expandAllNodes: () => void;
 
     // SubNode actions
     addSubNode: (nodeId: string, parentSubNodeId?: string, text?: string) => void;
@@ -199,6 +201,7 @@ export interface MindMapStore {
     promoteSubNode: (nodeId: string, subNodeId: string) => string | null;
     demoteNode: (spawnedNodeId: string) => void;
     reorderSubNode: (nodeId: string, subNodeId: string, newIndex: number) => void;
+    updateSubNodeTimes: (nodeId: string, subNodeId: string, startTime: string | null, endTime: string | null, granularity: 'date' | 'datetime') => void;
 
     // Links
     addLink: (sourceId: string, targetId: string) => string;
@@ -220,6 +223,7 @@ export interface MindMapStore {
     panViewport: (dx: number, dy: number) => void;
     zoomViewport: (zoom: number, centerX?: number, centerY?: number) => void;
     setViewport: (viewport: ViewportState) => void;
+    fitViewToNodes: (stageWidth: number, stageHeight: number) => void;
 
     // Document
     setTitle: (title: string) => void;
@@ -483,6 +487,26 @@ export const useMindMapStore = create<MindMapStore>()(
             });
         },
 
+        expandAllNodes: () => {
+            set((state) => {
+                for (const node of Object.values(state.nodes)) {
+                    node.collapsed = false;
+
+                    const expandSubNodes = (subNodes: SubNode[]) => {
+                        for (const sn of subNodes) {
+                            if (sn.childNodeId) {
+                                sn.collapsed = false;
+                            }
+                            if (sn.subNodes.length > 0) {
+                                expandSubNodes(sn.subNodes);
+                            }
+                        }
+                    };
+                    expandSubNodes(node.subNodes);
+                }
+            });
+        },
+
         // ── SubNode Actions ─────────────────────────────────────────────────
 
         addSubNode: (nodeId, parentSubNodeId, text = 'New item') => {
@@ -564,7 +588,42 @@ export const useMindMapStore = create<MindMapStore>()(
                 const node = state.nodes[nodeId];
                 if (!node) return;
                 const subNode = findSubNode(node.subNodes, subNodeId);
-                if (subNode) subNode.checked = !subNode.checked;
+                if (!subNode) return;
+
+                subNode.checked = !subNode.checked;
+
+                // If this node was spawned from a subnode, we may need to sync the original subnode
+                if (node.parentSubNodeId && node.parentId) {
+                    const ownerNode = state.nodes[node.parentId];
+                    if (ownerNode) {
+                        const originalSubNode = findSubNode(ownerNode.subNodes, node.parentSubNodeId);
+                        if (originalSubNode && originalSubNode.type === 'checklist') {
+                            // Check if all checklist subnodes in the current node are checked
+                            let allChecked = true;
+                            let hasChecklistItems = false;
+
+                            const checkAll = (sns: SubNode[]) => {
+                                for (const sn of sns) {
+                                    if (sn.type === 'checklist') {
+                                        hasChecklistItems = true;
+                                        if (!sn.checked) {
+                                            allChecked = false;
+                                            return;
+                                        }
+                                    }
+                                    checkAll(sn.subNodes);
+                                }
+                            };
+                            checkAll(node.subNodes);
+
+                            // If there are checklist items and all are checked, check the original.
+                            // Otherwise, uncheck it.
+                            if (hasChecklistItems) {
+                                originalSubNode.checked = allChecked;
+                            }
+                        }
+                    }
+                }
             });
         },
 
@@ -650,6 +709,27 @@ export const useMindMapStore = create<MindMapStore>()(
                 const [removed] = node.subNodes.splice(idx, 1);
                 const clampedIndex = Math.max(0, Math.min(newIndex, node.subNodes.length));
                 node.subNodes.splice(clampedIndex, 0, removed);
+            });
+        },
+
+        updateSubNodeTimes: (nodeId, subNodeId, startTime, endTime, granularity) => {
+            set((state) => {
+                const node = state.nodes[nodeId];
+                if (!node) return;
+                const subNode = findSubNode(node.subNodes, subNodeId);
+                if (!subNode || subNode.type !== 'checklist') return;
+
+                if (startTime === null) delete subNode.startTime;
+                else subNode.startTime = startTime;
+
+                if (endTime === null) delete subNode.endTime;
+                else subNode.endTime = endTime;
+
+                if (!subNode.startTime && !subNode.endTime) {
+                    delete subNode.timeGranularity;
+                } else {
+                    subNode.timeGranularity = granularity;
+                }
             });
         },
 
@@ -747,6 +827,99 @@ export const useMindMapStore = create<MindMapStore>()(
             });
         },
 
+        fitViewToNodes: (stageWidth, stageHeight) => {
+            set((state) => {
+                // If there are no nodes, just reset to center
+                const nodeIds = Object.keys(state.nodes);
+                if (nodeIds.length === 0) {
+                    state.viewport = { x: 0, y: 0, zoom: 1 };
+                    return;
+                }
+
+                // Calculate an exact theoretical layout just for sizing
+                const layout = computeLayout(state.nodes, state.rootIds, {
+                    nodeWidth: 200,
+                    nodeBaseHeight: 44,
+                    subNodeRowHeight: 32,
+                    horizontalSpacing: 280, // 200 + 80
+                    verticalSpacing: 24,
+                });
+
+                let minX = Infinity;
+                let maxX = -Infinity;
+                let minY = Infinity;
+                let maxY = -Infinity;
+
+                let forestMinY = Infinity;
+                let forestMaxY = -Infinity;
+
+                let hasValidLayout = false;
+                for (const [nodeId, info] of layout.entries()) {
+                    hasValidLayout = true;
+
+                    forestMinY = Math.min(forestMinY, info.y);
+                    forestMaxY = Math.max(forestMaxY, info.y + info.height);
+
+                    // Apply any manual positions if any, otherwise layout position
+                    const manualPos = state.manualPositions[nodeId];
+                    const finalX = manualPos ? manualPos.x : info.x;
+                    const finalY = manualPos ? manualPos.y : info.y;
+
+                    minX = Math.min(minX, finalX);
+                    maxX = Math.max(maxX, finalX + info.width);
+                    minY = Math.min(minY, finalY);
+                    maxY = Math.max(maxY, finalY + info.height);
+                }
+
+                if (!hasValidLayout) {
+                    state.viewport = { x: 0, y: 0, zoom: 1 };
+                    return;
+                }
+
+                if (forestMinY === Infinity) {
+                    forestMinY = 0;
+                    forestMaxY = 0;
+                }
+
+                // Add canvas rendering offsets (matches calculations in MindMapCanvas)
+                const offsetX = stageWidth * 0.12;
+                const forestHeight = forestMaxY - forestMinY;
+                const offsetY = stageHeight / 2 - forestMinY - forestHeight / 2;
+
+                minX += offsetX;
+                maxX += offsetX;
+                minY += offsetY;
+                maxY += offsetY;
+
+                if (!hasValidLayout) {
+                    state.viewport = { x: 0, y: 0, zoom: 1 };
+                    return;
+                }
+
+                const PADDING = 100;
+
+                // Content dimensions
+                const contentWidth = maxX - minX;
+                const contentHeight = maxY - minY;
+
+                // Scale required to fit
+                const scaleX = (stageWidth - PADDING * 2) / contentWidth;
+                const scaleY = (stageHeight - PADDING * 2) / contentHeight;
+
+                // Choose minimum scale so both directions fit, bounded at max zoom 1
+                const zoom = Math.max(0.1, Math.min(1, Math.min(scaleX, scaleY)));
+
+                // Calculate center taking into account the new zoom level
+                const contentCenterX = minX + contentWidth / 2;
+                const contentCenterY = minY + contentHeight / 2;
+
+                const newX = stageWidth / 2 - contentCenterX * zoom;
+                const newY = stageHeight / 2 - contentCenterY * zoom;
+
+                state.viewport = { x: newX, y: newY, zoom };
+            });
+        },
+
         // ── Document ────────────────────────────────────────────────────────
 
         setTitle: (title) => {
@@ -762,7 +935,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 state.links = doc.links ?? {};
                 // Support legacy single-root docs
                 state.rootIds = doc.rootIds ?? ((doc as any).rootId ? [(doc as any).rootId] : []);
-                state.manualPositions = {};
+                state.manualPositions = doc.manualPositions ?? {};
                 state.title = doc.title;
                 state.viewport = doc.viewport;
                 state.selectedNodeIds = [];
@@ -782,6 +955,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 nodes: JSON.parse(JSON.stringify(state.nodes)),
                 edges: JSON.parse(JSON.stringify(state.edges)),
                 links: JSON.parse(JSON.stringify(state.links)),
+                manualPositions: JSON.parse(JSON.stringify(state.manualPositions)),
                 theme: {
                     name: 'Default Dark',
                     mode: 'dark',

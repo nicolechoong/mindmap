@@ -30,6 +30,7 @@ const electronAPI: ElectronAPI = {
             'menu:new', 'menu:open', 'menu:save', 'menu:saveAs',
             'menu:exportPng', 'menu:exportMarkdown', 'menu:exportJson',
             'menu:undo', 'menu:redo', 'menu:tidyUp',
+            'menu:expandAll',
             'menu:zoomIn', 'menu:zoomOut', 'menu:zoomReset',
             'menu:toggleTheme', 'menu:showShortcuts',
         ];

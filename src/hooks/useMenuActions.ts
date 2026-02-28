@@ -72,6 +72,10 @@ export function useMenuActions(
                     store.pushUndo();
                     store.tidyUp();
                     break;
+                case 'expandAll':
+                    store.pushUndo();
+                    store.expandAllNodes();
+                    break;
                 case 'zoomIn':
                     store.zoomViewport(store.viewport.zoom + 0.15);
                     break;

@@ -167,6 +167,11 @@ function buildMenu() {
         },
         { type: 'separator' },
         {
+          label: 'Expand All',
+          click: () => mainWindow?.webContents.send('menu:expandAll'),
+        },
+        { type: 'separator' },
+        {
           label: 'Toggle Theme',
           accelerator: 'CmdOrCtrl+Shift+T',
           click: () => mainWindow?.webContents.send('menu:toggleTheme'),

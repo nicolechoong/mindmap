@@ -4,6 +4,7 @@ import type Konva from 'konva';
 import { useMindMapStore } from '../../store/store';
 import { computeLayout, type NodeLayoutInfo } from '../../layout/layout';
 import { ContextMenu } from '../context/ContextMenu';
+import { DateTimePicker } from '../picker/DateTimePicker';
 import type { MindMapNode, SubNode } from '../../types';
 
 // ── Design constants ──────────────────────────────────────────────────────
@@ -17,6 +18,7 @@ const CONNECTOR_RADIUS = 5;
 const TITLE_PAD_Y = 12;  // vertical padding inside title
 const ROW_PAD_Y = 8;     // vertical padding inside subnode row
 const LINE_HEIGHT_FACTOR = 1.35;
+const TIME_BADGE_HEIGHT = 18; // height of the time pill badge row
 
 // Theme-aware color palettes
 function getColors(theme: 'light' | 'dark') {
@@ -39,6 +41,9 @@ function getColors(theme: 'light' | 'dark') {
             canvasBg: '#0f0f14',
             addBtnText: '#555570',
             rootText: '#ffffff',
+            timeBadgePlanned: { bg: '#1e2a3a', text: '#7ab8e0' },   // muted blue
+            timeBadgeDeadline: { bg: '#3a2a1e', text: '#e0a87a' },   // muted orange
+            timeBadgeSlot: { bg: '#1e3a2a', text: '#7ae0a8' },   // muted green
         };
     }
     return {
@@ -59,6 +64,9 @@ function getColors(theme: 'light' | 'dark') {
         canvasBg: '#f4f4f8',
         addBtnText: '#999',
         rootText: '#ffffff',
+        timeBadgePlanned: { bg: '#e0eef8', text: '#2a6595' },
+        timeBadgeDeadline: { bg: '#f8ebe0', text: '#95612a' },
+        timeBadgeSlot: { bg: '#e0f8eb', text: '#2a9561' },
     };
 }
 
@@ -136,13 +144,54 @@ function getTitleHeight(text: string, isRoot: boolean, hasCollapseBtn: boolean):
     return Math.max(MIN_TITLE_HEIGHT, textH + TITLE_PAD_Y * 2);
 }
 
-function getRowHeight(text: string, depth: number, hasLink: boolean): number {
+function getRowHeight(text: string, depth: number, hasLink: boolean, hasTime: boolean = false): number {
     const indent = depth * 14;
     const linkSpace = hasLink ? 16 : 0;
     const availWidth = NODE_WIDTH - ROW_PADDING_X * 2 - indent - 20 - linkSpace;
     const lines = measureTextLines(text, availWidth, 12);
     const textH = lines * 12 * LINE_HEIGHT_FACTOR;
-    return Math.max(MIN_ROW_HEIGHT, Math.ceil(textH + ROW_PAD_Y * 2));
+    const badgeH = hasTime ? TIME_BADGE_HEIGHT : 0;
+    return Math.max(MIN_ROW_HEIGHT, Math.ceil(textH + badgeH + ROW_PAD_Y * 2));
+}
+
+// ── Time Badge Helpers ────────────────────────────────────────────────────
+
+function formatTimeLabel(startTime?: string, endTime?: string, granularity?: 'date' | 'datetime'): { text: string; type: 'planned' | 'deadline' | 'slot' } | null {
+    if (!startTime && !endTime) return null;
+
+    const fmt = (iso: string): string => {
+        if (!iso) return '';
+        const isDate = iso.length <= 10;
+        if (isDate) {
+            const d = new Date(iso + 'T00:00:00');
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+        const d = new Date(iso);
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
+            d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    };
+
+    const fmtTimeOnly = (iso: string): string => {
+        const d = new Date(iso);
+        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    };
+
+    if (startTime && endTime) {
+        // Same day with times → show "Mar 2 14:00 → 15:00"
+        const sameDay = startTime.slice(0, 10) === endTime.slice(0, 10);
+        if (sameDay && granularity === 'datetime') {
+            return { text: `📅 ${fmt(startTime)} → ${fmtTimeOnly(endTime)}`, type: 'slot' };
+        }
+        return { text: `📅 ${fmt(startTime)} → ${fmt(endTime)}`, type: 'slot' };
+    }
+    if (startTime) {
+        return { text: `📅 ${fmt(startTime)}`, type: 'planned' };
+    }
+    return { text: `⏰ ${fmt(endTime!)}`, type: 'deadline' };
+}
+
+function subNodeHasTime(sn: SubNode): boolean {
+    return !!(sn.startTime || sn.endTime);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -198,7 +247,7 @@ function computeNodeDims(
     const subNodeDims: SubNodeDim[] = [];
     let yOffset = 0;
     for (const { subNode: sn, depth } of flatSubs) {
-        const h = getRowHeight(sn.text, depth, !!sn.childNodeId);
+        const h = getRowHeight(sn.text, depth, !!sn.childNodeId, subNodeHasTime(sn));
         subNodeDims.push({ id: sn.id, height: h, yOffset });
         yOffset += h;
     }
@@ -233,6 +282,8 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
         x: number;
         y: number;
     } | null>(null);
+    const [timePicker, setTimePicker] = useState<{ x: number; y: number; nodeId: string; subNodeId: string } | null>(null);
+    const [selectedBadge, setSelectedBadge] = useState<{ nodeId: string, subNodeId: string } | null>(null);
 
     const COLORS = useMemo(() => getColors(theme), [theme]);
 
@@ -246,6 +297,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
     const pushUndo = useMindMapStore((s) => s.pushUndo);
     const updateNodeText = useMindMapStore((s) => s.updateNodeText);
     const updateSubNodeText = useMindMapStore((s) => s.updateSubNodeText);
+    const updateSubNodeTimes = useMindMapStore((s) => s.updateSubNodeTimes);
     const toggleSubNodeChecked = useMindMapStore((s) => s.toggleSubNodeChecked);
     const toggleSubNodeCollapse = useMindMapStore((s) => s.toggleSubNodeCollapse);
     const addSubNode = useMindMapStore((s) => s.addSubNode);
@@ -301,6 +353,24 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
         window.addEventListener('mindmap:edit-node', handler);
         return () => window.removeEventListener('mindmap:edit-node', handler);
     }, []);
+
+    useEffect(() => {
+        const handleBadgeDelete = (e: KeyboardEvent) => {
+            if (!selectedBadge) return;
+            // Don't handle if typing in an input/textarea
+            const tag = (e.target as HTMLElement)?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                e.preventDefault();
+                pushUndo();
+                updateSubNodeTimes(selectedBadge.nodeId, selectedBadge.subNodeId, null, null, 'date');
+                setSelectedBadge(null);
+            }
+        };
+        window.addEventListener('keydown', handleBadgeDelete);
+        return () => window.removeEventListener('keydown', handleBadgeDelete);
+    }, [selectedBadge, updateSubNodeTimes, pushUndo]);
 
     // Compute dimensions for all nodes (dynamic heights due to text wrapping)
     const nodeDims = useMemo(() => {
@@ -372,9 +442,12 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
             if (e.target === e.target.getStage()) {
                 clearSelection();
                 selectLink(null);
+                setCtxMenu(null);
+                setTimePicker(null);
                 setEditingNodeId(null);
                 setEditingSubNodeId(null);
                 setCtxMenu(null);
+                setSelectedBadge(null);
                 if (linkingSourceId) {
                     setLinkingSource(null);
                     setLinkingMousePos(null);
@@ -805,6 +878,18 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                         if (!node) return null;
                         const isSelected = selectedNodeIds.includes(nodeId);
                         const isRoot = rootIds.includes(nodeId);
+
+                        let isPromotedCompleted = false;
+                        if (node.parentId && node.parentSubNodeId) {
+                            const parentNode = nodes[node.parentId];
+                            if (parentNode) {
+                                const sourceSubNode = findSubNodeById(parentNode.subNodes, node.parentSubNodeId);
+                                if (sourceSubNode && sourceSubNode.type === 'checklist' && sourceSubNode.checked) {
+                                    isPromotedCompleted = true;
+                                }
+                            }
+                        }
+
                         const ePos = getEffectivePos(nodeId);
                         const x = ePos.x;
                         const y = ePos.y;
@@ -957,7 +1042,8 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     fontSize={isRoot ? 15 : 13}
                                     fontFamily="Inter, sans-serif"
                                     fontStyle={isRoot ? 'bold' : '600'}
-                                    fill={isRoot ? COLORS.rootText : COLORS.titleText}
+                                    fill={isPromotedCompleted ? COLORS.rowTextChecked : (isRoot ? COLORS.rootText : COLORS.titleText)}
+                                    textDecoration={isPromotedCompleted ? 'line-through' : ''}
                                     verticalAlign="middle"
                                     wrap="none"
                                     lineHeight={LINE_HEIGHT_FACTOR}
@@ -1156,7 +1242,77 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                                 />
                                             </Group>
 
-                                            {/* Link indicator / collapse toggle (checklist only) */}
+                                            {/* Time badge */}
+                                            {!isAttachment && (() => {
+                                                const badge = formatTimeLabel(sn.startTime, sn.endTime, sn.timeGranularity);
+                                                if (!badge) return null;
+                                                const badgeColors = badge.type === 'planned' ? COLORS.timeBadgePlanned
+                                                    : badge.type === 'deadline' ? COLORS.timeBadgeDeadline
+                                                        : COLORS.timeBadgeSlot;
+                                                // Calculate text height to position badge below it
+                                                const textAvailW = NODE_WIDTH - ROW_PADDING_X * 2 - indent - 20 - (sn.childNodeId ? 16 : 0);
+                                                const textLines = measureTextLines(sn.text, textAvailW, 12);
+                                                const textH = textLines * 12 * LINE_HEIGHT_FACTOR;
+                                                const badgeY = ROW_PAD_Y + textH + 4;
+                                                const badgeX = ROW_PADDING_X + indent + 20;
+
+                                                // Measure badge text width
+                                                _measureCtx.font = '10px Inter, sans-serif';
+                                                const badgeTextW = _measureCtx.measureText(badge.text).width;
+                                                const badgeW = badgeTextW + 10;
+
+                                                return (
+                                                    <Group
+                                                        x={badgeX}
+                                                        y={badgeY}
+                                                        onClick={(e) => {
+                                                            e.cancelBubble = true;
+                                                            setSelectedBadge({ nodeId, subNodeId: sn.id });
+                                                            // Clear other selections
+                                                            setSelection([]);
+                                                            selectLink(null);
+                                                            setSelectedSubNode(null, null);
+                                                        }}
+                                                        onDblClick={(e) => {
+                                                            e.cancelBubble = true;
+                                                            setTimePicker({
+                                                                x: e.evt.clientX,
+                                                                y: e.evt.clientY,
+                                                                nodeId,
+                                                                subNodeId: sn.id,
+                                                            });
+                                                        }}
+                                                        onMouseEnter={(e) => {
+                                                            const c = e.target.getStage()?.container();
+                                                            if (c) c.style.cursor = 'pointer';
+                                                        }}
+                                                        onMouseLeave={(e) => {
+                                                            const c = e.target.getStage()?.container();
+                                                            if (c) c.style.cursor = 'default';
+                                                        }}
+                                                    >
+                                                        <Rect
+                                                            width={badgeW}
+                                                            height={14}
+                                                            cornerRadius={7}
+                                                            fill={badgeColors.bg}
+                                                            stroke={selectedBadge?.subNodeId === sn.id ? COLORS.selectedRing : undefined}
+                                                            strokeWidth={selectedBadge?.subNodeId === sn.id ? 2 : 0}
+                                                        />
+                                                        <Text
+                                                            width={badgeW}
+                                                            height={14}
+                                                            text={badge.text}
+                                                            fontSize={10}
+                                                            fontFamily="Inter, sans-serif"
+                                                            fill={badgeColors.text}
+                                                            align="center"
+                                                            verticalAlign="middle"
+                                                        />
+                                                    </Group>
+                                                );
+                                            })()}
+
                                             {!isAttachment && sn.childNodeId && (
                                                 <Group
                                                     x={NODE_WIDTH - ROW_PADDING_X - 8}
@@ -1430,6 +1586,26 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                     nodeId={ctxMenu.nodeId}
                     subNodeId={ctxMenu.subNodeId}
                     onClose={() => setCtxMenu(null)}
+                    onSetTime={(nodeId, subNodeId) => {
+                        setCtxMenu(null);
+                        setTimePicker({
+                            x: ctxMenu.x,
+                            y: ctxMenu.y,
+                            nodeId,
+                            subNodeId,
+                        });
+                    }}
+                />
+            )}
+
+            {/* Date Time Picker */}
+            {timePicker && (
+                <DateTimePicker
+                    x={timePicker.x}
+                    y={timePicker.y}
+                    nodeId={timePicker.nodeId}
+                    subNodeId={timePicker.subNodeId}
+                    onClose={() => setTimePicker(null)}
                 />
             )}
         </div>

@@ -387,3 +387,128 @@ body,
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
 }
+
+/* ── DateTimePicker Popover ─────────────────────────────────────────────── */
+
+.dtp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+}
+
+.dtp-popover {
+  position: fixed;
+  z-index: 1000;
+  width: 260px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: ctx-appear 100ms ease;
+}
+
+.dtp-header {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.dtp-toggle {
+  display: flex;
+  gap: 4px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+}
+
+.dtp-toggle-btn {
+  flex: 1;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.dtp-toggle-btn:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.dtp-toggle-btn.dtp-toggle-active {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.dtp-toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dtp-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.dtp-input:focus {
+  border-color: var(--color-primary);
+}
+
+/* Fix date/datetime-local input calendar icon in dark mode */
+[data-theme='dark'] .dtp-input::-webkit-calendar-picker-indicator {
+  filter: invert(1);
+}
+
+.dtp-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.dtp-btn {
+  padding: 5px 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.dtp-btn-cancel {
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+}
+
+.dtp-btn-cancel:hover {
+  background: var(--color-surface-hover);
+}
+
+.dtp-btn-save {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.dtp-btn-save:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+.dtp-btn-save:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

@@ -22,7 +22,7 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
     const redo = useMindMapStore((s) => s.redo);
     const setSelection = useMindMapStore((s) => s.setSelection);
     const zoomViewport = useMindMapStore((s) => s.zoomViewport);
-    const setViewport = useMindMapStore((s) => s.setViewport);
+    const fitViewToNodes = useMindMapStore((s) => s.fitViewToNodes);
     const undoStack = useMindMapStore((s) => s.undoStack);
     const redoStack = useMindMapStore((s) => s.redoStack);
 
@@ -110,14 +110,29 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
             <div className="fab-divider" />
 
             <div className="fab-group">
-                <button className="fab-btn" title="Zoom Out" onClick={() => zoomViewport(zoom - 0.1)}>
+                <button className="fab-btn" title="Zoom Out" onClick={() => {
+                    const currentPercent = Math.round(zoom * 100);
+                    const nextPercent = Math.floor((currentPercent - 1) / 10) * 10;
+                    zoomViewport(nextPercent / 100);
+                }}>
                     −
                 </button>
                 <span className="fab-zoom">{Math.round(zoom * 100)}%</span>
-                <button className="fab-btn" title="Zoom In" onClick={() => zoomViewport(zoom + 0.1)}>
+                <button className="fab-btn" title="Zoom In" onClick={() => {
+                    const currentPercent = Math.round(zoom * 100);
+                    const nextPercent = Math.ceil((currentPercent + 1) / 10) * 10;
+                    zoomViewport(nextPercent / 100);
+                }}>
                     ＋
                 </button>
-                <button className="fab-btn" title="Reset View" onClick={() => setViewport({ x: 0, y: 0, zoom: 1 })}>
+                <button className="fab-btn" title="Fit to Screen" onClick={() => {
+                    const stage = document.querySelector('.konvajs-content');
+                    if (stage) {
+                        fitViewToNodes(stage.clientWidth, stage.clientHeight);
+                    } else {
+                        fitViewToNodes(window.innerWidth, window.innerHeight);
+                    }
+                }}>
                     ⊞
                 </button>
             </div>

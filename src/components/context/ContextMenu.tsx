@@ -18,9 +18,10 @@ interface ContextMenuProps {
     nodeId: string;
     subNodeId?: string;
     onClose: () => void;
+    onSetTime?: (nodeId: string, subNodeId: string) => void;
 }
 
-export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, nodeId, subNodeId, onClose, onSetTime }: ContextMenuProps) {
     const nodes = useMindMapStore((s) => s.nodes);
     const rootIds = useMindMapStore((s) => s.rootIds);
     const addChildNode = useMindMapStore((s) => s.addChildNode);
@@ -39,6 +40,7 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuPro
     const setLinkingSource = useMindMapStore((s) => s.setLinkingSource);
     const deleteLink = useMindMapStore((s) => s.deleteLink);
     const reorderSubNode = useMindMapStore((s) => s.reorderSubNode);
+    const updateSubNodeTimes = useMindMapStore((s) => s.updateSubNodeTimes);
 
     const node = nodes[nodeId];
     if (!node) return null;
@@ -99,6 +101,19 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose }: ContextMenuPro
             action: () => { pushUndo(); deleteSubNode(nodeId, subNodeId); },
             danger: true,
         });
+        // Time items for checklist subnodes
+        if (!isAttachment) {
+            if (sn.startTime || sn.endTime) {
+                items.push({
+                    label: '✕ Clear Time',
+                    action: () => { pushUndo(); updateSubNodeTimes(nodeId, subNodeId, null, null, 'date'); },
+                });
+            }
+            items.push({
+                label: '🕐 Set Time',
+                action: () => { if (onSetTime) onSetTime(nodeId, subNodeId); },
+            });
+        }
     } else {
         // Node context menu
         items.push({

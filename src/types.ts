@@ -17,6 +17,9 @@ export interface SubNode {
     collapsed: boolean;
     subNodes: SubNode[];
     childNodeId: string | null;
+    startTime?: string;     // ISO 8601: "2026-03-03" (date) or "2026-03-03T14:00" (datetime)
+    endTime?: string;       // ISO 8601, same granularity as startTime
+    timeGranularity?: 'date' | 'datetime';
 }
 
 // ── MindMapNode ───────────────────────────────────────────────────────────
@@ -95,6 +98,7 @@ export interface MindMapDocument {
     nodes: Record<string, MindMapNode>;
     edges: Record<string, MindMapEdge>;
     links: Record<string, MindMapLink>;
+    manualPositions?: Record<string, { x: number; y: number }>;
     theme: ThemeConfig;
     viewport: { x: number; y: number; zoom: number };
     createdAt: string;

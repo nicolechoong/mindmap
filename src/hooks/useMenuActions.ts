@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useMindMapStore } from '../store/store';
-import { toMarkdown, toJson, stageToDataUrl } from '../utils/export';
+import { toMarkdown, toJson, stageToDataUrl, stageToJpgDataUrl } from '../utils/export';
 
 /**
  * Hook that listens to native menu actions sent from the main process
@@ -47,6 +47,15 @@ export function useMenuActions(
                     if (stageRef.current) {
                         const dataUrl = stageToDataUrl(stageRef.current);
                         await window.electronAPI.exportPng(dataUrl);
+                    }
+                    break;
+                }
+                case 'exportJpg': {
+                    if (stageRef.current) {
+                        const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+                        const bgColor = theme === 'dark' ? '#0f0f14' : '#f4f4f8';
+                        const dataUrl = await stageToJpgDataUrl(stageRef.current, bgColor);
+                        await window.electronAPI.exportJpg(dataUrl);
                     }
                     break;
                 }

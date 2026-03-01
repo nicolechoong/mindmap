@@ -6,6 +6,7 @@ export interface ElectronAPI {
     fileSaveAs: (data: string) => Promise<{ filePath: string } | null>;
     fileSetDirty: (dirty: boolean) => Promise<void>;
     exportPng: (dataUrl: string) => Promise<{ filePath: string } | null>;
+    exportJpg: (dataUrl: string) => Promise<{ filePath: string } | null>;
     exportMarkdown: (markdown: string) => Promise<{ filePath: string } | null>;
     exportJson: (json: string) => Promise<{ filePath: string } | null>;
     onMenuAction: (callback: (action: string) => void) => () => void;
@@ -20,6 +21,7 @@ const electronAPI: ElectronAPI = {
     fileSaveAs: (data: string) => ipcRenderer.invoke('file:saveAs', data),
     fileSetDirty: (dirty: boolean) => ipcRenderer.invoke('file:setDirty', dirty),
     exportPng: (dataUrl: string) => ipcRenderer.invoke('export:png', dataUrl),
+    exportJpg: (dataUrl: string) => ipcRenderer.invoke('export:jpg', dataUrl),
     exportMarkdown: (markdown: string) => ipcRenderer.invoke('export:markdown', markdown),
     exportJson: (json: string) => ipcRenderer.invoke('export:json', json),
     openPath: (filePath: string) => ipcRenderer.invoke('shell:openPath', filePath),
@@ -28,7 +30,7 @@ const electronAPI: ElectronAPI = {
     onMenuAction: (callback: (action: string) => void) => {
         const actions = [
             'menu:new', 'menu:open', 'menu:save', 'menu:saveAs',
-            'menu:exportPng', 'menu:exportMarkdown', 'menu:exportJson',
+            'menu:exportPng', 'menu:exportJpg', 'menu:exportMarkdown', 'menu:exportJson',
             'menu:undo', 'menu:redo', 'menu:tidyUp',
             'menu:expandAll',
             'menu:zoomIn', 'menu:zoomOut', 'menu:zoomReset',

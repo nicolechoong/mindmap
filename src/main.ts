@@ -110,6 +110,10 @@ function buildMenu() {
           click: () => mainWindow?.webContents.send('menu:exportPng'),
         },
         {
+          label: 'Export as JPG...',
+          click: () => mainWindow?.webContents.send('menu:exportJpg'),
+        },
+        {
           label: 'Export as Markdown...',
           click: () => mainWindow?.webContents.send('menu:exportMarkdown'),
         },
@@ -265,6 +269,17 @@ ipcMain.handle('export:png', async (_event, dataUrl: string) => {
   if (result.canceled || !result.filePath) return null;
 
   const base64Data = dataUrl.replace(/^data:image\/png;base64,/, '');
+  fs.writeFileSync(result.filePath, Buffer.from(base64Data, 'base64'));
+  return { filePath: result.filePath };
+});
+
+ipcMain.handle('export:jpg', async (_event, dataUrl: string) => {
+  const result = await dialog.showSaveDialog({
+    filters: [{ name: 'JPG Image', extensions: ['jpg', 'jpeg'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+
+  const base64Data = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
   fs.writeFileSync(result.filePath, Buffer.from(base64Data, 'base64'));
   return { filePath: result.filePath };
 });

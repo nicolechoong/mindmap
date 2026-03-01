@@ -79,3 +79,38 @@ export function stageToDataUrl(
         mimeType: 'image/png',
     });
 }
+
+// ── JPG Export ─────────────────────────────────────────────────────────────
+
+/**
+ * Export a Konva stage to a JPG data URL.
+ * Background must be filled since JPG doesn't support transparency.
+ */
+export async function stageToJpgDataUrl(
+    stage: { toDataURL: (config: { pixelRatio: number; mimeType: string }) => string },
+    backgroundColor: string = '#ffffff'
+): Promise<string> {
+    const pngUrl = stage.toDataURL({
+        pixelRatio: 2,
+        mimeType: 'image/png',
+    });
+
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return reject('No canvas context');
+
+            ctx.fillStyle = backgroundColor;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0);
+
+            resolve(canvas.toDataURL('image/jpeg', 0.95));
+        };
+        img.onerror = reject;
+        img.src = pngUrl;
+    });
+}

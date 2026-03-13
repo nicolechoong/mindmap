@@ -25,6 +25,8 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
     const fitViewToNodes = useMindMapStore((s) => s.fitViewToNodes);
     const undoStack = useMindMapStore((s) => s.undoStack);
     const redoStack = useMindMapStore((s) => s.redoStack);
+    const calendarOpen = useMindMapStore((s) => s.calendarOpen);
+    const toggleCalendar = useMindMapStore((s) => s.toggleCalendar);
 
     const firstSelected = selectedNodeIds.length > 0 ? selectedNodeIds[0] : null;
     const isRoot = firstSelected ? rootIds.includes(firstSelected) : false;
@@ -136,6 +138,16 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
                     ⊞
                 </button>
             </div>
+
+            <div className="fab-divider" />
+
+            <button
+                className={`fab-btn ${calendarOpen ? 'fab-btn-active' : ''}`}
+                title="Toggle Calendar (Ctrl+Shift+K)"
+                onClick={toggleCalendar}
+            >
+                📅
+            </button>
         </div>
     );
 }

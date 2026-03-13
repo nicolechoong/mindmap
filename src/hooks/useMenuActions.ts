@@ -10,6 +10,8 @@ export function useMenuActions(
     stageRef: React.RefObject<{ toDataURL: (config: { pixelRatio: number; mimeType: string }) => string } | null>,
     onToggleTheme: () => void,
     onShowShortcuts: () => void,
+    onGoHome: () => void,
+    onGoEditor: () => void,
 ) {
     const store = useMindMapStore();
 
@@ -18,15 +20,22 @@ export function useMenuActions(
 
         const unsubscribe = window.electronAPI.onMenuAction(async (action) => {
             switch (action) {
-                case 'new':
-                    store.newDocument();
+                case 'new': {
+                    // Auto-save current, then go home so user can create from there
+                    try {
+                        const curDoc = store.toDocument();
+                        await window.electronAPI.fileSave(JSON.stringify(curDoc, null, 2));
+                    } catch { /* ignore */ }
+                    onGoHome();
                     break;
+                }
                 case 'open': {
                     const result = await window.electronAPI.fileOpen();
                     if (result) {
                         try {
                             const doc = JSON.parse(result.content);
                             store.loadDocument(doc);
+                            onGoEditor();
                         } catch {
                             console.error('Failed to parse file');
                         }
@@ -41,6 +50,11 @@ export function useMenuActions(
                 case 'saveAs': {
                     const doc = store.toDocument();
                     await window.electronAPI.fileSaveAs(JSON.stringify(doc, null, 2));
+                    break;
+                }
+                case 'exportMindmap': {
+                    const doc = store.toDocument();
+                    await window.electronAPI.exportMindmap(JSON.stringify(doc, null, 2));
                     break;
                 }
                 case 'exportPng': {
@@ -100,11 +114,19 @@ export function useMenuActions(
                 case 'showShortcuts':
                     onShowShortcuts();
                     break;
+                case 'toggleCalendar':
+                    store.toggleCalendar();
+                    break;
+                case 'toggleCalendarSplit':
+                    store.setCalendarSplit(
+                        store.calendarSplit === 'vertical' ? 'horizontal' : 'vertical',
+                    );
+                    break;
                 default:
                     break;
             }
         });
 
         return unsubscribe;
-    }, [store, stageRef, onToggleTheme, onShowShortcuts]);
+    }, [store, stageRef, onToggleTheme, onShowShortcuts, onGoHome, onGoEditor]);
 }

@@ -12,6 +12,26 @@ let mainWindow: BrowserWindow | null = null;
 let currentFilePath: string | null = null;
 let isDirty = false;
 
+// ── Library Directory ─────────────────────────────────────────────────────
+
+function getLibraryDir(): string {
+  const dir = path.join(app.getPath('documents'), 'MindMap');
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+function uniqueFilePath(dir: string, baseName: string, ext: string): string {
+  let filePath = path.join(dir, `${baseName}${ext}`);
+  let counter = 1;
+  while (fs.existsSync(filePath)) {
+    filePath = path.join(dir, `${baseName} (${counter})${ext}`);
+    counter++;
+  }
+  return filePath;
+}
+
 const createWindow = () => {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -106,6 +126,10 @@ function buildMenu() {
         },
         { type: 'separator' },
         {
+          label: 'Export as .mindmap...',
+          click: () => mainWindow?.webContents.send('menu:exportMindmap'),
+        },
+        {
           label: 'Export as PNG...',
           click: () => mainWindow?.webContents.send('menu:exportPng'),
         },
@@ -181,6 +205,16 @@ function buildMenu() {
           click: () => mainWindow?.webContents.send('menu:toggleTheme'),
         },
         { type: 'separator' },
+        {
+          label: 'Toggle Calendar',
+          accelerator: 'CmdOrCtrl+Shift+K',
+          click: () => mainWindow?.webContents.send('menu:toggleCalendar'),
+        },
+        {
+          label: 'Toggle Calendar Split',
+          click: () => mainWindow?.webContents.send('menu:toggleCalendarSplit'),
+        },
+        { type: 'separator' },
         { role: 'toggleDevTools' },
         { role: 'togglefullscreen' },
       ],
@@ -214,8 +248,18 @@ ipcMain.handle('file:open', async () => {
 
   if (result.canceled || result.filePaths.length === 0) return null;
 
-  const filePath = result.filePaths[0];
+  let filePath = result.filePaths[0];
   const content = fs.readFileSync(filePath, 'utf-8');
+
+  // Copy into library if not already there
+  const libraryDir = getLibraryDir();
+  if (!filePath.startsWith(libraryDir)) {
+    const baseName = path.basename(filePath, path.extname(filePath));
+    const destPath = uniqueFilePath(libraryDir, baseName, '.mindmap');
+    fs.copyFileSync(filePath, destPath);
+    filePath = destPath;
+  }
+
   currentFilePath = filePath;
   isDirty = false;
   updateTitle();
@@ -302,6 +346,109 @@ ipcMain.handle('export:json', async (_event, json: string) => {
 
   fs.writeFileSync(result.filePath, json, 'utf-8');
   return { filePath: result.filePath };
+});
+
+ipcMain.handle('export:mindmap', async (_event, data: string) => {
+  const result = await dialog.showSaveDialog({
+    filters: [{ name: 'MindMap File', extensions: ['mindmap'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+
+  fs.writeFileSync(result.filePath, data, 'utf-8');
+  return { filePath: result.filePath };
+});
+
+// ── Library IPC ──────────────────────────────────────────────────────────
+
+ipcMain.handle('library:list', async () => {
+  const dir = getLibraryDir();
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.mindmap'));
+  const result: { name: string; filePath: string; updatedAt: string }[] = [];
+  for (const file of files) {
+    const filePath = path.join(dir, file);
+    try {
+      const raw = fs.readFileSync(filePath, 'utf-8');
+      const doc = JSON.parse(raw);
+      result.push({
+        name: doc.title || path.basename(file, '.mindmap'),
+        filePath,
+        updatedAt: doc.updatedAt || fs.statSync(filePath).mtime.toISOString(),
+      });
+    } catch {
+      // If JSON parsing fails, still list the file
+      result.push({
+        name: path.basename(file, '.mindmap'),
+        filePath,
+        updatedAt: fs.statSync(filePath).mtime.toISOString(),
+      });
+    }
+  }
+  // Sort newest first
+  result.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  return result;
+});
+
+ipcMain.handle('library:create', async (_event, title: string) => {
+  const dir = getLibraryDir();
+  const filePath = uniqueFilePath(dir, title, '.mindmap');
+  // Write a minimal document skeleton
+  const doc = {
+    version: 1,
+    title,
+    rootIds: [],
+    nodes: {},
+    edges: {},
+    links: {},
+    manualPositions: {},
+    theme: {},
+    viewport: { x: 0, y: 0, zoom: 1 },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(filePath, JSON.stringify(doc, null, 2), 'utf-8');
+  currentFilePath = filePath;
+  isDirty = false;
+  updateTitle();
+  return { filePath };
+});
+
+ipcMain.handle('library:rename', async (_event, filePath: string, newName: string) => {
+  const dir = path.dirname(filePath);
+  const newPath = uniqueFilePath(dir, newName, '.mindmap');
+  // Also update the title inside the JSON
+  try {
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const doc = JSON.parse(raw);
+    doc.title = newName;
+    doc.updatedAt = new Date().toISOString();
+    fs.writeFileSync(filePath, JSON.stringify(doc, null, 2), 'utf-8');
+  } catch { /* ignore parse errors */ }
+  fs.renameSync(filePath, newPath);
+  // Update currentFilePath if it was the active file
+  if (currentFilePath === filePath) {
+    currentFilePath = newPath;
+    updateTitle();
+  }
+  return { filePath: newPath };
+});
+
+ipcMain.handle('library:delete', async (_event, filePath: string) => {
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+  }
+  if (currentFilePath === filePath) {
+    currentFilePath = null;
+    isDirty = false;
+    updateTitle();
+  }
+});
+
+ipcMain.handle('library:read', async (_event, filePath: string) => {
+  const content = fs.readFileSync(filePath, 'utf-8');
+  currentFilePath = filePath;
+  isDirty = false;
+  updateTitle();
+  return { filePath, content };
 });
 
 // ── Attachment IPC ────────────────────────────────────────────────────────

@@ -173,6 +173,10 @@ export interface MindMapStore {
     viewport: ViewportState;
     title: string;
 
+    // Calendar
+    calendarOpen: boolean;
+    calendarSplit: 'vertical' | 'horizontal';
+
     // History
     undoStack: string[];
     redoStack: string[];
@@ -225,6 +229,10 @@ export interface MindMapStore {
     setViewport: (viewport: ViewportState) => void;
     fitViewToNodes: (stageWidth: number, stageHeight: number) => void;
 
+    // Calendar
+    toggleCalendar: () => void;
+    setCalendarSplit: (split: 'vertical' | 'horizontal') => void;
+
     // Document
     setTitle: (title: string) => void;
     loadDocument: (doc: MindMapDocument) => void;
@@ -254,6 +262,8 @@ function createInitialState() {
         selectedLinkId: null as string | null,
         viewport: { x: 0, y: 0, zoom: 1 },
         title: 'Untitled Mind Map',
+        calendarOpen: false,
+        calendarSplit: 'vertical' as 'vertical' | 'horizontal',
         undoStack: [] as string[],
         redoStack: [] as string[],
     };
@@ -917,6 +927,20 @@ export const useMindMapStore = create<MindMapStore>()(
                 const newY = stageHeight / 2 - contentCenterY * zoom;
 
                 state.viewport = { x: newX, y: newY, zoom };
+            });
+        },
+
+        // ── Calendar ─────────────────────────────────────────────────────────
+
+        toggleCalendar: () => {
+            set((state) => {
+                state.calendarOpen = !state.calendarOpen;
+            });
+        },
+
+        setCalendarSplit: (split) => {
+            set((state) => {
+                state.calendarSplit = split;
             });
         },
 

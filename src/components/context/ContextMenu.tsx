@@ -41,6 +41,8 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose, onSetTime }: Con
     const deleteLink = useMindMapStore((s) => s.deleteLink);
     const reorderSubNode = useMindMapStore((s) => s.reorderSubNode);
     const updateSubNodeTimes = useMindMapStore((s) => s.updateSubNodeTimes);
+    const calendarOpen = useMindMapStore((s) => s.calendarOpen);
+    const toggleCalendar = useMindMapStore((s) => s.toggleCalendar);
 
     const node = nodes[nodeId];
     if (!node) return null;
@@ -181,6 +183,11 @@ export function ContextMenu({ x, y, nodeId, subNodeId, onClose, onSetTime }: Con
                 danger: true,
             });
         }
+        // Calendar
+        items.push({
+            label: calendarOpen ? '📅 Hide Calendar' : '📅 Show Calendar',
+            action: () => { toggleCalendar(); },
+        });
     }
 
     return (

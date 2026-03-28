@@ -17,9 +17,10 @@ export interface ElectronAPI {
     // Library
     libraryList: () => Promise<{ name: string; filePath: string; updatedAt: string }[]>;
     libraryCreate: (title: string) => Promise<{ filePath: string }>;
-    libraryRename: (filePath: string, newName: string) => Promise<{ filePath: string }>;
-    libraryDelete: (filePath: string) => Promise<void>;
-    libraryRead: (filePath: string) => Promise<{ filePath: string; content: string }>;
+    libraryRename: (oldPath: string, newName: string) => Promise<{ filePath: string }>;
+    libraryDelete: (targetPath: string) => Promise<{ success: boolean }>;
+    libraryRead: (targetPath: string) => Promise<{ content: string }>;
+    libraryUpdate: (targetPath: string, content: string) => Promise<{ success: boolean }>;
 }
 
 const electronAPI: ElectronAPI = {
@@ -38,9 +39,10 @@ const electronAPI: ElectronAPI = {
     // Library
     libraryList: () => ipcRenderer.invoke('library:list'),
     libraryCreate: (title: string) => ipcRenderer.invoke('library:create', title),
-    libraryRename: (filePath: string, newName: string) => ipcRenderer.invoke('library:rename', filePath, newName),
-    libraryDelete: (filePath: string) => ipcRenderer.invoke('library:delete', filePath),
-    libraryRead: (filePath: string) => ipcRenderer.invoke('library:read', filePath),
+    libraryRename: (oldPath: string, newName: string) => ipcRenderer.invoke('library:rename', oldPath, newName),
+    libraryDelete: (targetPath: string) => ipcRenderer.invoke('library:delete', targetPath),
+    libraryRead: (targetPath: string) => ipcRenderer.invoke('library:read', targetPath),
+    libraryUpdate: (targetPath: string, content: string) => ipcRenderer.invoke('library:update', targetPath, content),
     onMenuAction: (callback: (action: string) => void) => {
         const actions = [
             'menu:new', 'menu:open', 'menu:save', 'menu:saveAs',

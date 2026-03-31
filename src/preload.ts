@@ -21,6 +21,7 @@ export interface ElectronAPI {
     libraryRename: (filePath: string, newName: string) => Promise<{ filePath: string }>;
     libraryDelete: (filePath: string) => Promise<void>;
     libraryRead: (filePath: string) => Promise<{ filePath: string; content: string }>;
+    libraryUpdate: (filePath: string, content: string) => Promise<{ success: boolean }>;
     // App Config
     getLastOpened: () => Promise<string | null>;
     clearLastOpened: () => Promise<void>;
@@ -56,6 +57,7 @@ const electronAPI: ElectronAPI = {
     libraryRename: (filePath: string, newName: string) => ipcRenderer.invoke('library:rename', filePath, newName),
     libraryDelete: (filePath: string) => ipcRenderer.invoke('library:delete', filePath),
     libraryRead: (filePath: string) => ipcRenderer.invoke('library:read', filePath),
+    libraryUpdate: (filePath: string, content: string) => ipcRenderer.invoke('library:update', filePath, content),
     // App Config
     getLastOpened: () => ipcRenderer.invoke('app:getLastOpened'),
     clearLastOpened: () => ipcRenderer.invoke('app:clearLastOpened'),
@@ -75,9 +77,6 @@ const electronAPI: ElectronAPI = {
             'menu:toggleCalendarSplit',
             'menu:openSettings',
         ];
-        const handler = (_event: Electron.IpcRendererEvent) => {
-            // The channel name IS the action
-        };
         const handlers = actions.map((action) => {
             const h = () => callback(action.replace('menu:', ''));
             ipcRenderer.on(action, h);

@@ -472,6 +472,15 @@ ipcMain.handle('library:list', async () => {
   }
 });
 
+
+
+ipcMain.handle('library:update', async (_event, targetPath: string, content: string) => {
+  const dir = getLibraryDir();
+  if (!targetPath.startsWith(dir)) throw new Error('Outside library');
+  fs.writeFileSync(targetPath, content, 'utf-8');
+  return { success: true };
+});
+
 ipcMain.handle('library:create', async (_event, title: string) => {
   const dir = getLibraryDir();
   const filePath = uniqueFilePath(dir, title, '.mindmap');

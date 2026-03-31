@@ -32,6 +32,22 @@ export function App() {
     const setAppSettings = useMindMapStore((s) => s.setAppSettings);
     const setConnectorStyle = useMindMapStore((s) => s.setConnectorStyle);
 
+    // Setup background auto-save loop
+    useEffect(() => {
+        if (screen !== 'editor' || !currentFilePath) return;
+
+        const timeoutId = setTimeout(() => {
+            try {
+                const doc = store.toDocument();
+                window.electronAPI.libraryUpdate(currentFilePath, JSON.stringify(doc, null, 2));
+            } catch (err) {
+                console.error('Auto-save failed:', err);
+            }
+        }, 2000);
+
+        return () => clearTimeout(timeoutId);
+    }, [store, screen, currentFilePath]);
+
     useKeyboard();
 
     const toggleTheme = useCallback(() => {

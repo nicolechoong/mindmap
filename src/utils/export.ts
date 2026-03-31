@@ -88,7 +88,7 @@ export function stageToDataUrl(
  */
 export async function stageToJpgDataUrl(
     stage: { toDataURL: (config: { pixelRatio: number; mimeType: string }) => string },
-    backgroundColor: string = '#ffffff'
+    backgroundColor = '#ffffff'
 ): Promise<string> {
     const pngUrl = stage.toDataURL({
         pixelRatio: 2,

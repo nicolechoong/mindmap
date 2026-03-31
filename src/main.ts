@@ -1,23 +1,83 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
-import started from 'electron-squirrel-startup';
-
-// Handle creating/removing shortcuts on Windows when installing/uninstalling.
-if (started) {
-  app.quit();
-}
+// squirrel-startup handles creating/removing shortcuts on Windows. Removed on macOS.
 
 let mainWindow: BrowserWindow | null = null;
 let currentFilePath: string | null = null;
 let isDirty = false;
 
+// ── Config File ───────────────────────────────────────────────────────────
+
+const DEFAULT_SETTINGS: AppSettings = {
+  libraryPath: '',
+  defaultConnectorStyle: 'orthogonal',
+  autoSaveInterval: 60,
+  theme: 'light',
+  inheritParentColor: false,
+};
+
+type AppSettings = {
+  libraryPath: string;
+  defaultConnectorStyle: 'bezier' | 'orthogonal' | 'horizontal';
+  autoSaveInterval: 0 | 30 | 60 | 300;
+  theme: 'light' | 'dark';
+  inheritParentColor: boolean;
+};
+
+type AppConfig = { lastOpened?: string | null; settings?: AppSettings };
+
+function getConfigPath(): string {
+  return path.join(app.getPath('userData'), 'mindmap-config.json');
+}
+
+function getConfig(): AppConfig {
+  try {
+    const p = getConfigPath();
+    if (fs.existsSync(p)) {
+      return JSON.parse(fs.readFileSync(p, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+  return {};
+}
+
+function setConfig(patch: Partial<AppConfig>) {
+  try {
+    const p = getConfigPath();
+    const config = getConfig();
+    Object.assign(config, patch);
+    fs.writeFileSync(p, JSON.stringify(config, null, 2), 'utf-8');
+  } catch { /* ignore */ }
+}
+
+function getSettings(): AppSettings {
+  const config = getConfig();
+  return { ...DEFAULT_SETTINGS, ...(config.settings ?? {}) };
+}
+
+function setConfigLastOpened(filePath: string | null) {
+  setConfig({ lastOpened: filePath });
+}
+
 // ── Library Directory ─────────────────────────────────────────────────────
 
 function getLibraryDir(): string {
-  const dir = path.join(app.getPath('documents'), 'MindMap');
+  const settings = getSettings();
+  let dir = settings.libraryPath;
+  if (!dir || dir.trim() === '') {
+    dir = path.join(app.getPath('documents'), 'MindMap');
+  }
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (err) {
+      console.error('Failed to create library directory:', err);
+      // Fallback to a temporary directory if documents is inaccessible
+      dir = path.join(app.getPath('userData'), 'MindMap');
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    }
   }
   return dir;
 }
@@ -198,6 +258,10 @@ function buildMenu() {
           label: 'Expand All',
           click: () => mainWindow?.webContents.send('menu:expandAll'),
         },
+        {
+          label: 'Collapse All',
+          click: () => mainWindow?.webContents.send('menu:collapseAll'),
+        },
         { type: 'separator' },
         {
           label: 'Toggle Theme',
@@ -225,6 +289,12 @@ function buildMenu() {
         {
           label: 'Keyboard Shortcuts',
           click: () => mainWindow?.webContents.send('menu:showShortcuts'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Settings…',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => mainWindow?.webContents.send('menu:openSettings'),
         },
       ],
     },
@@ -262,6 +332,7 @@ ipcMain.handle('file:open', async () => {
 
   currentFilePath = filePath;
   isDirty = false;
+  setConfigLastOpened(filePath);
   updateTitle();
   return { filePath, content };
 });
@@ -297,6 +368,7 @@ ipcMain.handle('file:saveAs', async (_event, data: string) => {
   fs.writeFileSync(result.filePath, data, 'utf-8');
   currentFilePath = result.filePath;
   isDirty = false;
+  setConfigLastOpened(result.filePath);
   updateTitle();
   return { filePath: result.filePath };
 });
@@ -361,31 +433,43 @@ ipcMain.handle('export:mindmap', async (_event, data: string) => {
 // ── Library IPC ──────────────────────────────────────────────────────────
 
 ipcMain.handle('library:list', async () => {
-  const dir = getLibraryDir();
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.mindmap'));
-  const result: { name: string; filePath: string; updatedAt: string }[] = [];
-  for (const file of files) {
-    const filePath = path.join(dir, file);
-    try {
-      const raw = fs.readFileSync(filePath, 'utf-8');
-      const doc = JSON.parse(raw);
-      result.push({
-        name: doc.title || path.basename(file, '.mindmap'),
-        filePath,
-        updatedAt: doc.updatedAt || fs.statSync(filePath).mtime.toISOString(),
-      });
-    } catch {
-      // If JSON parsing fails, still list the file
-      result.push({
-        name: path.basename(file, '.mindmap'),
-        filePath,
-        updatedAt: fs.statSync(filePath).mtime.toISOString(),
-      });
+  try {
+    const dir = getLibraryDir();
+    if (!fs.existsSync(dir)) return [];
+    
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.mindmap'));
+    const result: { name: string; filePath: string; updatedAt: string }[] = [];
+    for (const file of files) {
+      const filePath = path.join(dir, file);
+      try {
+        const raw = fs.readFileSync(filePath, 'utf-8');
+        const doc = JSON.parse(raw);
+        result.push({
+          name: doc.title || path.basename(file, '.mindmap'),
+          filePath,
+          updatedAt: doc.updatedAt || fs.statSync(filePath).mtime.toISOString(),
+        });
+      } catch (err) {
+        console.warn(`Failed to read/parse library file: ${file}`, err);
+        // If JSON parsing fails, still list the file if it exists
+        try {
+          if (fs.existsSync(filePath)) {
+            result.push({
+              name: path.basename(file, '.mindmap'),
+              filePath,
+              updatedAt: fs.statSync(filePath).mtime.toISOString(),
+            });
+          }
+        } catch { /* ignore */ }
+      }
     }
+    // Sort newest first
+    result.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    return result;
+  } catch (err) {
+    console.error('Failed to list library:', err);
+    return [];
   }
-  // Sort newest first
-  result.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  return result;
 });
 
 ipcMain.handle('library:create', async (_event, title: string) => {
@@ -408,6 +492,7 @@ ipcMain.handle('library:create', async (_event, title: string) => {
   fs.writeFileSync(filePath, JSON.stringify(doc, null, 2), 'utf-8');
   currentFilePath = filePath;
   isDirty = false;
+  setConfigLastOpened(filePath);
   updateTitle();
   return { filePath };
 });
@@ -427,6 +512,7 @@ ipcMain.handle('library:rename', async (_event, filePath: string, newName: strin
   // Update currentFilePath if it was the active file
   if (currentFilePath === filePath) {
     currentFilePath = newPath;
+    setConfigLastOpened(newPath);
     updateTitle();
   }
   return { filePath: newPath };
@@ -439,6 +525,7 @@ ipcMain.handle('library:delete', async (_event, filePath: string) => {
   if (currentFilePath === filePath) {
     currentFilePath = null;
     isDirty = false;
+    setConfigLastOpened(null);
     updateTitle();
   }
 });
@@ -447,6 +534,7 @@ ipcMain.handle('library:read', async (_event, filePath: string) => {
   const content = fs.readFileSync(filePath, 'utf-8');
   currentFilePath = filePath;
   isDirty = false;
+  setConfigLastOpened(filePath);
   updateTitle();
   return { filePath, content };
 });
@@ -465,6 +553,51 @@ ipcMain.handle('dialog:pickFile', async () => {
   const filePath = result.filePaths[0];
   const fileName = path.basename(filePath);
   return { filePath, fileName };
+});
+
+ipcMain.handle('dialog:confirmClose', async () => {
+  if (!mainWindow) return 'cancel';
+  const choice = dialog.showMessageBoxSync(mainWindow, {
+    type: 'question',
+    buttons: ['Save', "Don't Save", 'Cancel'],
+    defaultId: 0,
+    title: 'Unsaved Changes',
+    message: 'You have unsaved changes. Do you want to save before closing?',
+  });
+  
+  if (choice === 0) return 'save';
+  if (choice === 1) return 'dont-save';
+  return 'cancel';
+});
+
+ipcMain.handle('app:getLastOpened', () => {
+  const config = getConfig();
+  if (config.lastOpened && fs.existsSync(config.lastOpened)) {
+    return config.lastOpened;
+  }
+  return null;
+});
+
+ipcMain.handle('app:clearLastOpened', () => {
+  setConfig({ lastOpened: null });
+  currentFilePath = null;
+  updateTitle();
+});
+
+ipcMain.handle('app:getSettings', () => getSettings());
+
+ipcMain.handle('app:setSettings', (_event, patch: Partial<AppSettings>) => {
+  const current = getSettings();
+  setConfig({ settings: { ...current, ...patch } });
+});
+
+ipcMain.handle('app:pickFolder', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (result.canceled || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
 });
 
 // ── App lifecycle ─────────────────────────────────────────────────────────

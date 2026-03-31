@@ -71,12 +71,23 @@ function getColors(theme: 'light' | 'dark') {
 }
 
 // Derive a darker shade for borders from a hex color
-function darkenHex(hex: string, amount: number = 0.15): string {
+function darkenHex(hex: string, amount = 0.15): string {
     const n = parseInt(hex.replace('#', ''), 16);
     const r = Math.max(0, Math.round(((n >> 16) & 0xff) * (1 - amount)));
     const g = Math.max(0, Math.round(((n >> 8) & 0xff) * (1 - amount)));
     const b = Math.max(0, Math.round((n & 0xff) * (1 - amount)));
     return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+}
+
+// Determine if we should use dark or light text for a given background hex
+function getContrastColor(hexColor: string): string {
+    const cleanHex = hexColor.replace('#', '');
+    const r = parseInt(cleanHex.slice(0, 2), 16);
+    const g = parseInt(cleanHex.slice(2, 4), 16);
+    const b = parseInt(cleanHex.slice(4, 6), 16);
+    // Relative luminance
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.5 ? '#1a1a2e' : '#ffffff';
 }
 
 // ── Text Measurement ──────────────────────────────────────────────────────
@@ -87,7 +98,7 @@ function wrapTextWithNewlines(
     text: string,
     maxWidth: number,
     fontSize: number,
-    fontWeight: string = '',
+    fontWeight = '',
 ): string {
     _measureCtx.font = `${fontWeight} ${fontSize}px Inter, sans-serif`.trim();
     if (!text || !text.trim()) return text;
@@ -127,7 +138,7 @@ function measureTextLines(
     text: string,
     maxWidth: number,
     fontSize: number,
-    fontWeight: string = '',
+    fontWeight = '',
 ): number {
     const wrappedStr = wrapTextWithNewlines(text, maxWidth, fontSize, fontWeight);
     if (!wrappedStr) return 1;
@@ -144,7 +155,7 @@ function getTitleHeight(text: string, isRoot: boolean, hasCollapseBtn: boolean):
     return Math.max(MIN_TITLE_HEIGHT, textH + TITLE_PAD_Y * 2);
 }
 
-function getRowHeight(text: string, depth: number, hasLink: boolean, hasTime: boolean = false): number {
+function getRowHeight(text: string, depth: number, hasLink: boolean, hasTime = false): number {
     const indent = depth * 14;
     const linkSpace = hasLink ? 16 : 0;
     const availWidth = NODE_WIDTH - ROW_PADDING_X * 2 - indent - 20 - linkSpace;
@@ -243,6 +254,15 @@ function computeNodeDims(
     isRoot: boolean,
 ): NodeDims {
     const titleHeight = getTitleHeight(node.text, isRoot, node.children.length > 0);
+    if (node.subNodesCollapsed && node.subNodes.length > 0) {
+        // When sub-items are collapsed, show a compact indicator row
+        const indicatorHeight = 20;
+        return {
+            titleHeight,
+            subNodeDims: [],
+            totalHeight: titleHeight + indicatorHeight,
+        };
+    }
     const flatSubs = flattenSubNodes(node.subNodes);
     const subNodeDims: SubNodeDim[] = [];
     let yOffset = 0;
@@ -256,6 +276,66 @@ function computeNodeDims(
         subNodeDims,
         totalHeight: titleHeight + yOffset,
     };
+}
+
+// ── Inline Editor Component ───────────────────────────────────────────────
+
+interface InlineEditorProps {
+    defaultValue: string;
+    onCommit: (val: string) => void;
+    onCancel: () => void;
+    className?: string;
+    style: React.CSSProperties;
+}
+
+function InlineEditor({ defaultValue, onCommit, onCancel, style }: InlineEditorProps) {
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    useEffect(() => {
+        const el = textareaRef.current;
+        if (el) {
+            el.focus();
+            el.select();
+            // Initial height sync
+            el.style.height = 'auto';
+            el.style.height = `${el.scrollHeight}px`;
+        }
+    }, []);
+
+    const handleInput = (e: React.FormEvent<HTMLTextAreaElement>) => {
+        const el = e.currentTarget;
+        el.style.height = 'auto';
+        el.style.height = `${el.scrollHeight}px`;
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            onCommit(e.currentTarget.value);
+        } else if (e.key === 'Escape') {
+            onCancel();
+        }
+        e.stopPropagation();
+    };
+
+    return (
+        <textarea
+            ref={textareaRef}
+            defaultValue={defaultValue}
+            onInput={handleInput}
+            onKeyDown={handleKeyDown}
+            onBlur={(e) => onCommit(e.target.value)}
+            rows={1}
+            style={{
+                ...style,
+                outline: 'none',
+                resize: 'none',
+                overflow: 'hidden',
+                boxSizing: 'border-box',
+                zIndex: 1000,
+            }}
+        />
+    );
 }
 
 // ── Canvas Component ──────────────────────────────────────────────────────
@@ -290,10 +370,12 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
     const nodes = useMindMapStore((s) => s.nodes);
     const edges = useMindMapStore((s) => s.edges);
     const rootIds = useMindMapStore((s) => s.rootIds);
+    const hiddenRootIds = useMindMapStore((s) => s.hiddenRootIds);
     const selectedNodeIds = useMindMapStore((s) => s.selectedNodeIds);
     const setSelection = useMindMapStore((s) => s.setSelection);
     const clearSelection = useMindMapStore((s) => s.clearSelection);
     const toggleCollapse = useMindMapStore((s) => s.toggleCollapse);
+    const reparentNode = useMindMapStore((s) => s.reparentNode);
     const pushUndo = useMindMapStore((s) => s.pushUndo);
     const updateNodeText = useMindMapStore((s) => s.updateNodeText);
     const updateSubNodeText = useMindMapStore((s) => s.updateSubNodeText);
@@ -313,11 +395,18 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
     const manualPositions = useMindMapStore((s) => s.manualPositions);
     const setNodePosition = useMindMapStore((s) => s.setNodePosition);
     const links = useMindMapStore((s) => s.links);
+    const connectorStyle = useMindMapStore((s) => s.connectorStyle);
+    const connectorAnchor = useMindMapStore((s) => s.connectorAnchor);
+    const lineStyle = useMindMapStore((s) => s.lineStyle);
     const linkingSourceId = useMindMapStore((s) => s.linkingSourceId);
     const selectedLinkId = useMindMapStore((s) => s.selectedLinkId);
     const addLink = useMindMapStore((s) => s.addLink);
     const setLinkingSource = useMindMapStore((s) => s.setLinkingSource);
     const selectLink = useMindMapStore((s) => s.selectLink);
+    const deleteLink = useMindMapStore((s) => s.deleteLink);
+    const moveRootToIndex = useMindMapStore((s) => s.moveRootToIndex);
+    const moveChildToIndex = useMindMapStore((s) => s.moveChildToIndex);
+    const setNodeSide = useMindMapStore((s) => s.setNodeSide);
 
     const stageZoom = viewport.zoom;
     const stagePos = { x: viewport.x, y: viewport.y };
@@ -327,6 +416,19 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
     const [linkingMousePos, setLinkingMousePos] = useState<{ x: number; y: number } | null>(null);
     const linkModeRef = useRef(false);
     linkModeRef.current = !!linkingSourceId;
+
+    // Link right-click context menu
+    const [linkCtxMenu, setLinkCtxMenu] = useState<{
+        x: number;
+        y: number;
+        linkId: string;
+    } | null>(null);
+
+    // Navigation history for trace-back
+    const [navHistory, setNavHistory] = useState<Array<{
+        viewport: { x: number; y: number; zoom: number };
+        selectedNodeIds: string[];
+    }>>([]);
 
     // File drag-and-drop state
     const [dropTargetNodeId, setDropTargetNodeId] = useState<string | null>(null);
@@ -352,6 +454,17 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
         };
         window.addEventListener('mindmap:edit-node', handler);
         return () => window.removeEventListener('mindmap:edit-node', handler);
+    }, []);
+
+    // Listen for edit-subnode events
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            setEditingNodeId(detail.nodeId);
+            setEditingSubNodeId(detail.subNodeId);
+        };
+        window.addEventListener('mindmap:edit-subnode', handler);
+        return () => window.removeEventListener('mindmap:edit-subnode', handler);
     }, []);
 
     useEffect(() => {
@@ -391,15 +504,16 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
     }, [nodeDims]);
 
     // Layout
+    const visibleRootIds = useMemo(() => rootIds.filter(id => !hiddenRootIds.includes(id)), [rootIds, hiddenRootIds]);
     const layout = useMemo(() => {
-        return computeLayout(nodes, rootIds, {
+        return computeLayout(nodes, visibleRootIds, {
             nodeWidth: NODE_WIDTH,
             nodeBaseHeight: MIN_TITLE_HEIGHT,
             subNodeRowHeight: MIN_ROW_HEIGHT,
             horizontalSpacing: NODE_WIDTH + 80,
             verticalSpacing: 24,
-        }, nodeHeights);
-    }, [nodes, rootIds, nodeHeights]);
+        }, nodeHeights, manualPositions);
+    }, [nodes, visibleRootIds, nodeHeights, manualPositions]);
 
     // Compute forest bounding box for centering
     const forestBounds = useMemo(() => {
@@ -448,6 +562,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                 setEditingSubNodeId(null);
                 setCtxMenu(null);
                 setSelectedBadge(null);
+                setLinkCtxMenu(null);
                 if (linkingSourceId) {
                     setLinkingSource(null);
                     setLinkingMousePos(null);
@@ -502,6 +617,88 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
         [draggingPos, manualPositions, layout, offsetX, offsetY],
     );
 
+    // Follow a link — push current state to history, then pan to target node
+    const handleFollowLink = useCallback(
+        (linkId: string) => {
+            const link = links[linkId];
+            if (!link) return;
+
+            // Navigate to the target node
+            const targetId = link.targetId;
+            const targetInfo = layout.get(targetId);
+            const targetDims = nodeDims.get(targetId);
+            if (!targetInfo || !targetDims) return;
+
+            // Push current viewport + selection to history before navigating
+            setNavHistory((prev) => [
+                ...prev,
+                { viewport: { x: stagePos.x, y: stagePos.y, zoom: stageZoom }, selectedNodeIds: [...selectedNodeIds] },
+            ]);
+
+            const tPos = getEffectivePos(targetId);
+            const tCX = tPos.x + NODE_WIDTH / 2;
+            const tCY = tPos.y + targetDims.totalHeight / 2;
+
+            // Centre the target node in the viewport
+            const newX = dimensions.width / 2 - tCX * stageZoom;
+            const newY = dimensions.height / 2 - tCY * stageZoom;
+
+            setViewport({ x: newX, y: newY, zoom: stageZoom });
+            setSelection([targetId]);
+        },
+        [links, layout, nodeDims, getEffectivePos, dimensions, stageZoom, stagePos, selectedNodeIds, setViewport, setSelection],
+    );
+
+    // Trace back — pop and restore the previous viewport + selection
+    const handleTraceBack = useCallback(() => {
+        if (navHistory.length === 0) return;
+        const prev = navHistory[navHistory.length - 1];
+        setNavHistory((h) => h.slice(0, -1));
+        setViewport(prev.viewport);
+        if (prev.selectedNodeIds.length > 0) {
+            setSelection(prev.selectedNodeIds);
+        } else {
+            clearSelection();
+        }
+    }, [navHistory, setViewport, setSelection, clearSelection]);
+
+    // Alt+← keyboard shortcut for trace-back
+    useEffect(() => {
+        const handleTraceBackKey = (e: KeyboardEvent) => {
+            if (e.altKey && e.key === 'ArrowLeft') {
+                const tag = (e.target as HTMLElement)?.tagName;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+                e.preventDefault();
+                handleTraceBack();
+            }
+        };
+        window.addEventListener('keydown', handleTraceBackKey);
+        return () => window.removeEventListener('keydown', handleTraceBackKey);
+    }, [handleTraceBack]);
+
+    // Center node triggered by RootNodesPanel
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            const nodeId = detail.nodeId;
+            const targetInfo = layout.get(nodeId);
+            const targetDims = nodeDims.get(nodeId);
+            if (!targetInfo || !targetDims) return;
+
+            const tPos = getEffectivePos(nodeId);
+            const tCX = tPos.x + NODE_WIDTH / 2;
+            const tCY = tPos.y + targetDims.totalHeight / 2;
+
+            const newX = dimensions.width / 2 - tCX * stageZoom;
+            const newY = dimensions.height / 2 - tCY * stageZoom;
+
+            setViewport({ x: newX, y: newY, zoom: stageZoom });
+            setSelection([nodeId]);
+        };
+        window.addEventListener('mindmap:center-node', handler);
+        return () => window.removeEventListener('mindmap:center-node', handler);
+    }, [layout, nodeDims, getEffectivePos, dimensions, stageZoom, setViewport, setSelection]);
+
     // Build edges using effective positions with adaptive anchor selection
     const edgeLines = useMemo(() => {
         const lines: { key: string; points: number[]; color: string; width: number; targetId: string; entrySide: 'left' | 'right' | 'top' | 'bottom' }[] = [];
@@ -547,8 +744,10 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
             const dy = tCenterY - sCenterY;
 
             // Choose exit side for source
+            // 'horizontal' style forces left/right exits regardless of dy
             let sx: number, sy: number, sDirX: number, sDirY: number;
-            if (Math.abs(dx) >= Math.abs(dy)) {
+            const forceHorizontal = connectorAnchor === 'horizontal';
+            if (forceHorizontal || Math.abs(dx) >= Math.abs(dy)) {
                 // Primarily horizontal
                 if (dx >= 0) {
                     // Child is to the right → exit right
@@ -571,7 +770,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
             // Choose entry side for target
             let tx: number, ty: number, tDirX: number, tDirY: number;
             let entrySide: 'left' | 'right' | 'top' | 'bottom';
-            if (Math.abs(dx) >= Math.abs(dy)) {
+            if (forceHorizontal || Math.abs(dx) >= Math.abs(dy)) {
                 if (dx >= 0) {
                     // Child is to the right → enter left
                     tx = tPos.x; ty = tPos.y + tTitleH / 2; tDirX = -1; tDirY = 0;
@@ -593,18 +792,28 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                 }
             }
 
-            // Control point offset proportional to distance, clamped
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const cp = Math.max(30, Math.min(80, dist * 0.3));
-
-            const cp1x = sx + sDirX * cp;
-            const cp1y = sy + sDirY * cp;
-            const cp2x = tx + tDirX * cp;
-            const cp2y = ty + tDirY * cp;
+            let points: number[];
+            if (lineStyle === 'bezier') {
+                // Bezier mode
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const cp = Math.max(30, Math.min(80, dist * 0.3));
+                const cp1x = sx + sDirX * cp;
+                const cp1y = sy + sDirY * cp;
+                const cp2x = tx + tDirX * cp;
+                const cp2y = ty + tDirY * cp;
+                points = [sx, sy, cp1x, cp1y, cp2x, cp2y, tx, ty];
+            } else if (lineStyle === 'straight') {
+                // Straight line
+                points = [sx, sy, tx, ty];
+            } else {
+                // Orthogonal mode: step at horizontal midpoint
+                const midX = (sx + tx) / 2;
+                points = [sx, sy, midX, sy, midX, ty, tx, ty];
+            }
 
             lines.push({
                 key: edge.id,
-                points: [sx, sy, cp1x, cp1y, cp2x, cp2y, tx, ty],
+                points,
                 color: isPromoted ? COLORS.edgePromoted : COLORS.edgeColor,
                 width: isPromoted ? 2 : 1.5,
                 targetId: edge.targetId,
@@ -637,8 +846,9 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
             const tCenterX = tPos.x + tW / 2, tCenterY = tPos.y + tH / 2;
             const dx = tCenterX - sCenterX, dy = tCenterY - sCenterY;
 
+            const fh = connectorAnchor === 'horizontal';
             let sx: number, sy: number, sDirX: number, sDirY: number;
-            if (Math.abs(dx) >= Math.abs(dy)) {
+            if (fh || Math.abs(dx) >= Math.abs(dy)) {
                 if (dx >= 0) { sx = sPos.x + sW; sy = sCenterY; sDirX = 1; sDirY = 0; }
                 else { sx = sPos.x; sy = sCenterY; sDirX = -1; sDirY = 0; }
             } else {
@@ -647,7 +857,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
             }
 
             let tx: number, ty: number, tDirX: number, tDirY: number;
-            if (Math.abs(dx) >= Math.abs(dy)) {
+            if (fh || Math.abs(dx) >= Math.abs(dy)) {
                 if (dx >= 0) { tx = tPos.x; ty = tCenterY; tDirX = -1; tDirY = 0; }
                 else { tx = tPos.x + tW; ty = tCenterY; tDirX = 1; tDirY = 0; }
             } else {
@@ -655,18 +865,30 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                 else { tx = tCenterX; ty = tPos.y + tH; tDirX = 0; tDirY = 1; }
             }
 
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const cp = Math.max(30, Math.min(80, dist * 0.3));
-            const cp1x = sx + sDirX * cp, cp1y = sy + sDirY * cp;
-            const cp2x = tx + tDirX * cp, cp2y = ty + tDirY * cp;
+            let points: number[];
+            let midX: number, midY: number;
 
-            // Bezier midpoint at t=0.5
-            const midX = 0.125 * sx + 0.375 * cp1x + 0.375 * cp2x + 0.125 * tx;
-            const midY = 0.125 * sy + 0.375 * cp1y + 0.375 * cp2y + 0.125 * ty;
+            if (lineStyle === 'bezier') {
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const cp = Math.max(30, Math.min(80, dist * 0.3));
+                const cp1x = sx + sDirX * cp, cp1y = sy + sDirY * cp;
+                const cp2x = tx + tDirX * cp, cp2y = ty + tDirY * cp;
+                points = [sx, sy, cp1x, cp1y, cp2x, cp2y, tx, ty];
+                midX = 0.125 * sx + 0.375 * cp1x + 0.375 * cp2x + 0.125 * tx;
+                midY = 0.125 * sy + 0.375 * cp1y + 0.375 * cp2y + 0.125 * ty;
+            } else if (lineStyle === 'straight') {
+                points = [sx, sy, tx, ty];
+                midX = (sx + tx) / 2; midY = (sy + ty) / 2;
+            } else {
+                // Orthogonal: step via horizontal midpoint
+                const mx = (sx + tx) / 2;
+                points = [sx, sy, mx, sy, mx, ty, tx, ty];
+                midX = mx; midY = (sy + ty) / 2;
+            }
 
             result.push({
                 id: link.id,
-                points: [sx, sy, cp1x, cp1y, cp2x, cp2y, tx, ty],
+                points,
                 midX,
                 midY,
             });
@@ -803,8 +1025,12 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                             points={line.points}
                             stroke={line.color}
                             strokeWidth={line.width}
-                            bezier
-                            lineCap="round"
+                            {...(lineStyle === 'bezier'
+                                ? { bezier: true, lineCap: 'round' as const }
+                                : lineStyle === 'straight'
+                                ? { lineCap: 'round' as const }
+                                : { cornerRadius: 8, lineJoin: 'round' as const }
+                            )}
                             opacity={0.7}
                         />
                     ))}
@@ -820,11 +1046,25 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     points={ll.points}
                                     stroke="transparent"
                                     strokeWidth={12}
-                                    bezier
-                                    lineCap="round"
+                                    {...(lineStyle === 'bezier'
+                                        ? { bezier: true, lineCap: 'round' as const }
+                                        : lineStyle === 'straight'
+                                        ? { lineCap: 'round' as const }
+                                        : { cornerRadius: 8, lineJoin: 'round' as const }
+                                    )}
                                     onClick={(e) => {
                                         e.cancelBubble = true;
                                         selectLink(ll.id);
+                                    }}
+                                    onContextMenu={(e) => {
+                                        e.evt.preventDefault();
+                                        e.cancelBubble = true;
+                                        selectLink(ll.id);
+                                        setLinkCtxMenu({
+                                            x: e.evt.clientX,
+                                            y: e.evt.clientY,
+                                            linkId: ll.id,
+                                        });
                                     }}
                                     onMouseEnter={(e) => {
                                         setHoveredLinkId(ll.id);
@@ -843,8 +1083,12 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     stroke={isSelected ? COLORS.edgePromoted : COLORS.edgeColor}
                                     strokeWidth={isSelected ? 2 : 1.5}
                                     dash={[6, 4]}
-                                    bezier
-                                    lineCap="round"
+                                    {...(lineStyle === 'bezier'
+                                        ? { bezier: true, lineCap: 'round' as const }
+                                        : lineStyle === 'straight'
+                                        ? { lineCap: 'round' as const }
+                                        : { cornerRadius: 8, lineJoin: 'round' as const }
+                                    )}
                                     opacity={isHovered ? 1 : 0.6}
                                     listening={false}
                                 />
@@ -866,6 +1110,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                 stroke={COLORS.edgePromoted}
                                 strokeWidth={1.5}
                                 dash={[6, 4]}
+                                cornerRadius={8}
                                 opacity={0.5}
                                 listening={false}
                             />
@@ -896,7 +1141,8 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                         const dims = nodeDims.get(nodeId)!;
                         const titleH = dims.titleHeight;
                         const h = dims.totalHeight;
-                        const flatSubs = flattenSubNodes(node.subNodes);
+                        const isSubNodesHidden = !!node.subNodesCollapsed && node.subNodes.length > 0;
+                        const flatSubs = isSubNodesHidden ? [] : flattenSubNodes(node.subNodes);
 
                         return (
                             <Group
@@ -940,13 +1186,179 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                         x: e.target.x(),
                                         y: e.target.y(),
                                     });
+
+                                    const stage = e.target.getStage();
+                                    if (!stage) return;
+                                    const pointerPos = stage.getPointerPosition();
+                                    if (!pointerPos) return;
+                                    
+                                    const mouseX = (pointerPos.x - stagePos.x) / stageZoom;
+                                    const mouseY = (pointerPos.y - stagePos.y) / stageZoom;
+
+                                    let hitNodeId: string | null = null;
+                                    for (const [otherNodeId, info] of layout) {
+                                        if (otherNodeId === nodeId) continue;
+                                        
+                                        // Check bounds
+                                        const pos = (() => {
+                                            const manual = manualPositions[otherNodeId];
+                                            if (manual) return { x: manual.x + offsetX, y: manual.y + offsetY };
+                                            return { x: info.x + offsetX, y: info.y + offsetY };
+                                        })();
+                                        const dims = nodeDims.get(otherNodeId);
+                                        if (!dims) continue;
+
+                                        if (
+                                            mouseX >= pos.x && mouseX <= pos.x + NODE_WIDTH &&
+                                            mouseY >= pos.y && mouseY <= pos.y + dims.totalHeight
+                                        ) {
+                                            hitNodeId = otherNodeId;
+                                            break;
+                                        }
+                                    }
+                                    setDropTargetNodeId(hitNodeId);
                                 }}
                                 onDragEnd={(e) => {
                                     e.cancelBubble = true;
                                     setDraggingPos(null);
-                                    const newX = e.target.x() - offsetX;
-                                    const newY = e.target.y() - offsetY;
-                                    setNodePosition(nodeId, newX, newY);
+
+                                    if (dropTargetNodeId && dropTargetNodeId !== nodes[nodeId]?.parentId) {
+                                        let isDescendant = false;
+                                        let curr: MindMapNode | undefined = nodes[dropTargetNodeId];
+                                        while (curr) {
+                                            if (curr.id === nodeId) {
+                                                isDescendant = true; break;
+                                            }
+                                            curr = curr.parentId ? nodes[curr.parentId] : undefined;
+                                        }
+
+                                        if (!isDescendant && nodeId !== dropTargetNodeId) {
+                                            reparentNode(nodeId, dropTargetNodeId);
+                                            // Ensure node snaps to its new layer level hierarchy
+                                            useMindMapStore.setState((s) => {
+                                                delete s.manualPositions[nodeId];
+                                            });
+                                            
+                                            if (rootIds.includes(dropTargetNodeId)) {
+                                                const parentX = (layout.get(dropTargetNodeId)?.x ?? 0) + offsetX;
+                                                const dropCenterX = e.target.x() + NODE_WIDTH / 2;
+                                                const parentCenterX = parentX + NODE_WIDTH / 2;
+                                                setNodeSide(nodeId, dropCenterX < parentCenterX ? 'left' : 'right');
+                                            }
+                                        }
+                                    } else {
+                                        // --- Side detection & Sibling reorder detection ---
+                                        const draggedNode = nodes[nodeId];
+                                        const isRootNode = rootIds.includes(nodeId);
+                                        
+                                        // 1. Detect side if child of root
+                                        let currentSide: 'left' | 'right' = draggedNode?.side || 'right';
+                                        if (!isRootNode && draggedNode?.parentId) {
+                                            const parent = nodes[draggedNode.parentId];
+                                            if (parent && !parent.parentId) { // Parent is root
+                                                const parentX = (layout.get(parent.id)?.x ?? 0) + offsetX;
+                                                const dropCenterX = e.target.x() + NODE_WIDTH / 2;
+                                                const parentCenterX = parentX + NODE_WIDTH / 2;
+                                                const newSide = dropCenterX < parentCenterX ? 'left' : 'right';
+                                                if (newSide !== currentSide) {
+                                                    setNodeSide(nodeId, newSide);
+                                                    currentSide = newSide;
+                                                }
+                                            }
+                                        }
+
+                                        const siblings = isRootNode
+                                            ? rootIds
+                                            : (draggedNode?.parentId ? nodes[draggedNode.parentId]?.children : null);
+
+                                        if (siblings && siblings.length > 1) {
+                                            // 2. Filter siblings to only those on the SAME SIDE
+                                            const filteredSiblings = isRootNode 
+                                                ? siblings 
+                                                : siblings.filter(s => {
+                                                    if (s === nodeId) return true; // keep self for index calc
+                                                    return (nodes[s]?.side || 'right') === currentSide;
+                                                });
+
+                                            if (filteredSiblings.length > 1) {
+                                                const dropY = e.target.y();
+
+                                                // Build array of { id, midY } for each sibling on the same side except the dragged one
+                                                const siblingMids: { id: string; midY: number }[] = [];
+                                                for (const sibId of filteredSiblings) {
+                                                    if (sibId === nodeId) continue;
+                                                    const sibPos = (() => {
+                                                        const m = manualPositions[sibId];
+                                                        if (m) return { x: m.x + offsetX, y: m.y + offsetY };
+                                                        const li = layout.get(sibId);
+                                                        if (li) return { x: li.x + offsetX, y: li.y + offsetY };
+                                                        return { x: offsetX, y: offsetY };
+                                                    })();
+                                                    const sibDim = nodeDims.get(sibId);
+                                                    const h = sibDim ? sibDim.totalHeight : 40;
+                                                    siblingMids.push({ id: sibId, midY: sibPos.y + h / 2 });
+                                                }
+
+                                                // Sort by midY
+                                                siblingMids.sort((a, b) => a.midY - b.midY);
+
+                                                // Find insertion index in the filtered list
+                                                let targetIdxInFiltered = siblingMids.length;
+                                                for (let i = 0; i < siblingMids.length; i++) {
+                                                    if (dropY < siblingMids[i].midY) {
+                                                        targetIdxInFiltered = i;
+                                                        break;
+                                                    }
+                                                }
+
+                                                const origIdxInFiltered = filteredSiblings.indexOf(nodeId);
+                                                
+                                                if (targetIdxInFiltered !== origIdxInFiltered) {
+                                                    // Map the index in the filtered list back to the global sibling index
+                                                    // Actually, moveChildToIndex handles indices within the side list in my new store logic!
+                                                    // Wait, let's check moveChildToIndex in store.ts.
+                                                    // I updated reorderChildNode, but moveChildToIndex is a direct splice.
+                                                    // I should use moveChildToIndex with the global index?
+                                                    // No, if moveChildToIndex is side-naive, it will break my interleaved ordering.
+                                                    // Let's re-verify moveChildToIndex in store.ts.
+                                                    
+                                                    // I need to find the global index that corresponds to "targetIdxInFiltered"
+                                                    // in the original 'siblings' array.
+                                                    // If inserting at targetIdxInFiltered, we are basically saying 
+                                                    // "before the sibling that is currently at targetIdxInFiltered".
+                                                    
+                                                    let globalTargetIdx: number;
+                                                    if (targetIdxInFiltered < siblingMids.length) {
+                                                        const targetSibId = siblingMids[targetIdxInFiltered].id;
+                                                        globalTargetIdx = siblings.indexOf(targetSibId);
+                                                    } else {
+                                                        globalTargetIdx = siblings.length;
+                                                    }
+
+                                                    const origGlobalIdx = siblings.indexOf(nodeId);
+                                                    
+                                                    if (globalTargetIdx !== origGlobalIdx) {
+                                                        pushUndo();
+                                                        if (isRootNode) {
+                                                            moveRootToIndex(nodeId, globalTargetIdx);
+                                                        } else {
+                                                            moveChildToIndex(nodeId, globalTargetIdx);
+                                                        }
+                                                        
+                                                        const state = useMindMapStore.getState();
+                                                        if (state.manualPositions[nodeId]) {
+                                                            useMindMapStore.setState((s) => {
+                                                                delete s.manualPositions[nodeId];
+                                                            });
+                                                        }
+                                                        setDropTargetNodeId(null);
+                                                        return; // Done
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    setDropTargetNodeId(null);
                                 }}
                                 onContextMenu={(e) => {
                                     e.evt.preventDefault();
@@ -1009,7 +1421,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     width={NODE_WIDTH}
                                     height={h}
                                     fill={COLORS.nodeBg}
-                                    stroke={isRoot ? darkenHex(node.style.fillColor) : COLORS.nodeBorder}
+                                    stroke={darkenHex(node.style.fillColor)}
                                     strokeWidth={1}
                                     cornerRadius={BORDER_RADIUS}
                                 />
@@ -1018,17 +1430,17 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                 <Rect
                                     width={NODE_WIDTH}
                                     height={titleH}
-                                    fill={isRoot ? node.style.fillColor : COLORS.titleBg}
+                                    fill={node.style.fillColor}
                                     cornerRadius={
-                                        flatSubs.length > 0
+                                        (flatSubs.length > 0 || isSubNodesHidden)
                                             ? [BORDER_RADIUS, BORDER_RADIUS, 0, 0]
                                             : BORDER_RADIUS
                                     }
                                 />
-                                {flatSubs.length > 0 && (
+                                {(flatSubs.length > 0 || isSubNodesHidden) && (
                                     <Line
                                         points={[0, titleH, NODE_WIDTH, titleH]}
-                                        stroke={isRoot ? darkenHex(node.style.fillColor) : COLORS.nodeBorder}
+                                        stroke={darkenHex(node.style.fillColor)}
                                         strokeWidth={1}
                                         listening={false}
                                     />
@@ -1042,7 +1454,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     fontSize={isRoot ? 15 : 13}
                                     fontFamily="Inter, sans-serif"
                                     fontStyle={isRoot ? 'bold' : '600'}
-                                    fill={isPromotedCompleted ? COLORS.rowTextChecked : (isRoot ? COLORS.rootText : COLORS.titleText)}
+                                    fill={isPromotedCompleted ? COLORS.rowTextChecked : getContrastColor(node.style.fillColor)}
                                     textDecoration={isPromotedCompleted ? 'line-through' : ''}
                                     verticalAlign="middle"
                                     wrap="none"
@@ -1407,6 +1819,43 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                     );
                                 })()}
 
+                                {/* Collapsed sub-items indicator */}
+                                {isSubNodesHidden && (
+                                    <Group
+                                        y={titleH}
+                                        onClick={(e) => {
+                                            e.cancelBubble = true;
+                                            useMindMapStore.getState().toggleSubNodesCollapsed(nodeId);
+                                        }}
+                                        onMouseEnter={(e) => {
+                                            const c = e.target.getStage()?.container();
+                                            if (c) c.style.cursor = 'pointer';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                            const c = e.target.getStage()?.container();
+                                            if (c) c.style.cursor = 'default';
+                                        }}
+                                    >
+                                        <Rect
+                                            width={NODE_WIDTH}
+                                            height={20}
+                                            fill="transparent"
+                                        />
+                                        <Text
+                                            x={ROW_PADDING_X}
+                                            y={0}
+                                            width={NODE_WIDTH - ROW_PADDING_X * 2}
+                                            height={20}
+                                            text={`▸ ${node.subNodes.length} item${node.subNodes.length !== 1 ? 's' : ''}`}
+                                            fontSize={10}
+                                            fontFamily="Inter, sans-serif"
+                                            fontStyle="normal"
+                                            fill={COLORS.rowTextChecked}
+                                            verticalAlign="middle"
+                                        />
+                                    </Group>
+                                )}
+
                                 {/* Add item button */}
                                 <Group
                                     y={h - 2}
@@ -1414,7 +1863,8 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                         if (linkingSourceId && linkingSourceId !== nodeId) return;
                                         e.cancelBubble = true;
                                         pushUndo();
-                                        addSubNode(nodeId);
+                                        const newSubId = addSubNode(nodeId);
+                                        window.dispatchEvent(new CustomEvent('mindmap:edit-subnode', { detail: { nodeId, subNodeId: newSubId } }));
                                     }}
                                     onMouseUp={(e) => {
                                         if (linkingSourceId && linkingSourceId !== nodeId) return;
@@ -1456,31 +1906,11 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                 const isRoot = rootIds.includes(editingNodeId);
                 const titleH = dims.titleHeight;
                 return (
-                    <textarea
+                    <InlineEditor
                         key={`edit-${editingNodeId}`}
-                        ref={(el) => {
-                            if (el) {
-                                el.focus();
-                                el.select();
-                                el.style.height = 'auto';
-                                el.style.height = `${el.scrollHeight}px`;
-                            }
-                        }}
                         defaultValue={nodes[editingNodeId]?.text || ''}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                handleEditCommit((e.target as HTMLTextAreaElement).value);
-                            } else if (e.key === 'Escape') setEditingNodeId(null);
-                            e.stopPropagation();
-                        }}
-                        onInput={(e) => {
-                            const el = e.target as HTMLTextAreaElement;
-                            el.style.height = 'auto';
-                            el.style.height = `${el.scrollHeight}px`;
-                        }}
-                        onBlur={(e) => handleEditCommit(e.target.value)}
-                        rows={1}
+                        onCommit={handleEditCommit}
+                        onCancel={() => setEditingNodeId(null)}
                         style={{
                             position: 'absolute',
                             left: pos.x + 1,
@@ -1495,15 +1925,10 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                             fontFamily: 'Inter, sans-serif',
                             fontWeight: isRoot ? 700 : 600,
                             lineHeight: `${LINE_HEIGHT_FACTOR}`,
-                            color: isRoot ? COLORS.rootText : COLORS.titleText,
-                            background: isRoot ? (nodes[editingNodeId]?.style.fillColor ?? '#6c63ff') : COLORS.titleBg,
+                            color: getContrastColor(nodes[editingNodeId]?.style.fillColor ?? '#6c63ff'),
+                            background: nodes[editingNodeId]?.style.fillColor ?? '#6c63ff',
                             border: `2px solid ${COLORS.selectedRing}`,
                             borderRadius: `${BORDER_RADIUS * stageZoom}px`,
-                            outline: 'none',
-                            boxSizing: 'border-box' as const,
-                            zIndex: 1000,
-                            resize: 'none' as const,
-                            overflow: 'hidden',
                         }}
                     />
                 );
@@ -1526,31 +1951,11 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                 const indent = depth * 14;
 
                 return (
-                    <textarea
+                    <InlineEditor
                         key={`edit-sn-${editingSubNodeId}`}
-                        ref={(el) => {
-                            if (el) {
-                                el.focus();
-                                el.select();
-                                el.style.height = 'auto';
-                                el.style.height = `${el.scrollHeight}px`;
-                            }
-                        }}
                         defaultValue={sn?.text || ''}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                                e.preventDefault();
-                                handleSubNodeEditCommit(editingNodeId, editingSubNodeId, (e.target as HTMLTextAreaElement).value);
-                            } else if (e.key === 'Escape') { setEditingSubNodeId(null); setEditingNodeId(null); }
-                            e.stopPropagation();
-                        }}
-                        onInput={(e) => {
-                            const el = e.target as HTMLTextAreaElement;
-                            el.style.height = 'auto';
-                            el.style.height = `${el.scrollHeight}px`;
-                        }}
-                        onBlur={(e) => handleSubNodeEditCommit(editingNodeId, editingSubNodeId, e.target.value)}
-                        rows={1}
+                        onCommit={(val) => handleSubNodeEditCommit(editingNodeId, editingSubNodeId, val)}
+                        onCancel={() => { setEditingSubNodeId(null); setEditingNodeId(null); }}
                         style={{
                             position: 'absolute',
                             left: pos.x + 1,
@@ -1563,12 +1968,12 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                             paddingRight: ROW_PADDING_X * stageZoom,
                             fontSize: `${12 * stageZoom}px`,
                             fontFamily: 'Inter, sans-serif',
+                            fontWeight: 400,
                             lineHeight: `${LINE_HEIGHT_FACTOR}`,
-                            color: COLORS.rowText,
-                            background: COLORS.rowBg,
+                            color: theme === 'dark' ? '#e8e8ed' : '#333340',
+                            background: theme === 'dark' ? '#1e1e2a' : '#ffffff',
                             border: `2px solid ${COLORS.selectedRing}`,
                             borderRadius: `4px`,
-                            outline: 'none',
                             boxSizing: 'border-box' as const,
                             zIndex: 1000,
                             resize: 'none' as const,
@@ -1596,6 +2001,56 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                         });
                     }}
                 />
+            )}
+
+            {/* Link context menu */}
+            {linkCtxMenu && (
+                <>
+                    <div className="ctx-backdrop" onClick={() => setLinkCtxMenu(null)} />
+                    <div className="ctx-menu" style={{ left: linkCtxMenu.x, top: linkCtxMenu.y }}>
+                        <button
+                            className="ctx-item"
+                            onClick={() => {
+                                handleFollowLink(linkCtxMenu.linkId);
+                                setLinkCtxMenu(null);
+                            }}
+                        >
+                            → Follow Link
+                        </button>
+                        {navHistory.length > 0 && (
+                            <button
+                                className="ctx-item"
+                                onClick={() => {
+                                    handleTraceBack();
+                                    setLinkCtxMenu(null);
+                                }}
+                            >
+                                ← Trace Back
+                            </button>
+                        )}
+                        <button
+                            className="ctx-item ctx-danger"
+                            onClick={() => {
+                                pushUndo();
+                                deleteLink(linkCtxMenu.linkId);
+                                setLinkCtxMenu(null);
+                            }}
+                        >
+                            ✕ Delete Link
+                        </button>
+                    </div>
+                </>
+            )}
+
+            {/* Floating trace-back button — visible when nav history is non-empty */}
+            {navHistory.length > 0 && (
+                <button
+                    className="nav-back-btn"
+                    title="Trace Back (Alt + ←)"
+                    onClick={handleTraceBack}
+                >
+                    ← Back
+                </button>
             )}
 
             {/* Date Time Picker */}

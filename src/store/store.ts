@@ -11,24 +11,28 @@ import type {
     ThemeConfig,
     ViewportState,
     MindMapDocument,
+    ConnectorStyle,
+    ConnectorAnchor,
+    LineStyle,
+    AppSettings,
 } from '../types';
 import { computeLayout } from '../layout/layout';
 
 // ── Default styles ────────────────────────────────────────────────────────
 
 const DEFAULT_NODE_STYLE: NodeStyle = {
-    fillColor: '#2a2a3a',
+    fillColor: '#f3f4f6',
     strokeColor: '#6c63ff',
-    textColor: '#e8e8ed',
+    textColor: '#1a1a2e',
     fontSize: 14,
     fontWeight: 'normal',
     shape: 'rounded',
 };
 
 const ROOT_NODE_STYLE: NodeStyle = {
-    fillColor: '#6c63ff',
+    fillColor: '#f3f4f6',
     strokeColor: '#7f78ff',
-    textColor: '#ffffff',
+    textColor: '#1a1a2e',
     fontSize: 18,
     fontWeight: 'bold',
     shape: 'rounded',
@@ -172,10 +176,29 @@ export interface MindMapStore {
     selectedLinkId: string | null;
     viewport: ViewportState;
     title: string;
+    isDirty: boolean;
+
+    // Panels
+    rootNodesPanelOpen: boolean;
+    toggleRootNodesPanel: () => void;
+    hiddenRootIds: string[];
+    toggleRootVisibility: (nodeId: string) => void;
 
     // Calendar
     calendarOpen: boolean;
     calendarSplit: 'vertical' | 'horizontal';
+
+    // Connector Style
+    connectorStyle: ConnectorStyle;
+    connectorAnchor: ConnectorAnchor;
+    lineStyle: LineStyle;
+    setConnectorStyle: (style: ConnectorStyle) => void;
+    setConnectorAnchor: (anchor: ConnectorAnchor) => void;
+    setLineStyle: (style: LineStyle) => void;
+
+    // App Settings
+    appSettings: AppSettings;
+    setAppSettings: (patch: Partial<AppSettings>) => void;
 
     // History
     undoStack: string[];
@@ -190,13 +213,22 @@ export interface MindMapStore {
     updateNodeNotes: (nodeId: string, notes: string) => void;
     updateNodeStyle: (nodeId: string, style: Partial<NodeStyle>) => void;
     toggleCollapse: (nodeId: string) => void;
+    setCollapseSubtree: (nodeId: string, collapsed: boolean) => void;
+    toggleSubNodesCollapsed: (nodeId: string) => void;
+    convertToRootNode: (nodeId: string) => void;
     reparentNode: (nodeId: string, newParentId: string) => void;
     setNodePosition: (nodeId: string, x: number, y: number) => void;
     tidyUp: () => void;
     expandAllNodes: () => void;
+    collapseAllNodes: () => void;
+    setNodeSide: (nodeId: string, side: 'left' | 'right') => void;
+    reorderRootNode: (nodeId: string, direction: 'up' | 'down') => void;
+    reorderChildNode: (nodeId: string, direction: 'up' | 'down') => void;
+    moveRootToIndex: (nodeId: string, newIndex: number) => void;
+    moveChildToIndex: (nodeId: string, newIndex: number) => void;
 
     // SubNode actions
-    addSubNode: (nodeId: string, parentSubNodeId?: string, text?: string) => void;
+    addSubNode: (nodeId: string, parentSubNodeId?: string, text?: string) => string;
     addAttachmentSubNode: (nodeId: string, filePath: string, fileName: string) => void;
     deleteSubNode: (nodeId: string, subNodeId: string) => void;
     updateSubNodeText: (nodeId: string, subNodeId: string, text: string) => void;
@@ -243,6 +275,7 @@ export interface MindMapStore {
     pushUndo: () => void;
     undo: () => void;
     redo: () => void;
+    setDirty: (dirty: boolean) => void;
 }
 
 // ── Initial state ─────────────────────────────────────────────────────────
@@ -257,15 +290,28 @@ function createInitialState() {
         manualPositions: {} as Record<string, { x: number; y: number }>,
         selectedNodeIds: [] as string[],
         selectedSubNodeId: null as string | null,
-        selectedSubNodeParentId: null as string | null,
-        linkingSourceId: null as string | null,
-        selectedLinkId: null as string | null,
+        selectedSubNodeParentId: null,
+        linkingSourceId: null,
+        selectedLinkId: null,
         viewport: { x: 0, y: 0, zoom: 1 },
-        title: 'Untitled Mind Map',
+        title: 'Untitled',
+        isDirty: false,
+        hiddenRootIds: [] as string[],
+        rootNodesPanelOpen: false,
         calendarOpen: false,
         calendarSplit: 'vertical' as 'vertical' | 'horizontal',
+        connectorStyle: 'orthogonal' as ConnectorStyle,
+        connectorAnchor: 'adaptive' as ConnectorAnchor,
+        lineStyle: 'orthogonal' as LineStyle,
         undoStack: [] as string[],
         redoStack: [] as string[],
+        appSettings: {
+            libraryPath: '',
+            defaultConnectorStyle: 'orthogonal',
+            autoSaveInterval: 60,
+            theme: 'light',
+            inheritParentColor: false,
+        } as AppSettings,
     };
 }
 
@@ -284,6 +330,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 newNodeId = rootNode.id;
                 state.nodes[rootNode.id] = rootNode;
                 state.rootIds.push(rootNode.id);
+                state.isDirty = true;
             });
             return newNodeId;
         },
@@ -294,8 +341,22 @@ export const useMindMapStore = create<MindMapStore>()(
                 const parent = state.nodes[parentId];
                 if (!parent) return;
 
-                const child = createNode(text, parentId);
+                // If inherit color is on, copy the parent's fill color to the child
+                const childStyle = state.appSettings.inheritParentColor
+                    ? { ...DEFAULT_NODE_STYLE, fillColor: parent.style.fillColor }
+                    : DEFAULT_NODE_STYLE;
+
+                const child = createNode(text, parentId, null, childStyle);
                 newNodeId = child.id;
+                
+                // Inherit side from parent's branch if parent is not root
+                if (parent.parentId) {
+                    child.side = parent.side || 'right';
+                } else {
+                    // Default to right for children of root
+                    child.side = 'right';
+                }
+                
                 state.nodes[child.id] = child;
                 parent.children.push(child.id);
 
@@ -304,6 +365,7 @@ export const useMindMapStore = create<MindMapStore>()(
 
                 // Expand parent if collapsed
                 if (parent.collapsed) parent.collapsed = false;
+                state.isDirty = true;
             });
             return newNodeId;
         },
@@ -321,14 +383,24 @@ export const useMindMapStore = create<MindMapStore>()(
                     state.nodes[newRoot.id] = newRoot;
                     const idx = state.rootIds.indexOf(siblingId);
                     state.rootIds.splice(idx + 1, 0, newRoot.id);
+                    state.isDirty = true;
                     return;
                 }
 
                 const parent = state.nodes[sibling.parentId];
                 if (!parent) return;
 
-                const newNode = createNode(text, parent.id);
+                // If inherit color is on, copy the parent's fill color to the new sibling
+                const siblingStyle = state.appSettings.inheritParentColor
+                    ? { ...DEFAULT_NODE_STYLE, fillColor: parent.style.fillColor }
+                    : DEFAULT_NODE_STYLE;
+
+                const newNode = createNode(text, parent.id, null, siblingStyle);
                 newNodeId = newNode.id;
+                
+                // Inherit side from sibling
+                newNode.side = sibling.side || 'right';
+                
                 state.nodes[newNode.id] = newNode;
 
                 // Insert after sibling
@@ -337,6 +409,7 @@ export const useMindMapStore = create<MindMapStore>()(
 
                 const edge = createEdge(parent.id, newNode.id);
                 state.edges[edge.id] = edge;
+                state.isDirty = true;
             });
             return newNodeId;
         },
@@ -400,6 +473,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 if (state.selectedLinkId && !state.links[state.selectedLinkId]) {
                     state.selectedLinkId = null;
                 }
+                state.isDirty = true;
             });
         },
 
@@ -417,6 +491,7 @@ export const useMindMapStore = create<MindMapStore>()(
                         if (subNode) subNode.text = text;
                     }
                 }
+                state.isDirty = true;
             });
         },
 
@@ -424,6 +499,7 @@ export const useMindMapStore = create<MindMapStore>()(
             set((state) => {
                 const node = state.nodes[nodeId];
                 if (node) node.notes = notes;
+                state.isDirty = true;
             });
         },
 
@@ -433,6 +509,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 if (node) {
                     node.style = { ...node.style, ...style };
                 }
+                state.isDirty = true;
             });
         },
 
@@ -440,6 +517,66 @@ export const useMindMapStore = create<MindMapStore>()(
             set((state) => {
                 const node = state.nodes[nodeId];
                 if (node) node.collapsed = !node.collapsed;
+                state.isDirty = true;
+            });
+        },
+
+        setCollapseSubtree: (nodeId, collapsed) => {
+            set((state) => {
+                const setAll = (id: string) => {
+                    const n = state.nodes[id];
+                    if (!n) return;
+                    if (n.children.length > 0) n.collapsed = collapsed;
+                    for (const childId of n.children) setAll(childId);
+                };
+                setAll(nodeId);
+                state.isDirty = true;
+            });
+        },
+
+        toggleSubNodesCollapsed: (nodeId) => {
+            set((state) => {
+                const node = state.nodes[nodeId];
+                if (node) node.subNodesCollapsed = !node.subNodesCollapsed;
+                state.isDirty = true;
+            });
+        },
+
+        convertToRootNode: (nodeId) => {
+            set((state) => {
+                const node = state.nodes[nodeId];
+                if (!node || !node.parentId) return;
+
+                const parent = state.nodes[node.parentId];
+                if (parent) {
+                    parent.children = parent.children.filter((id) => id !== nodeId);
+                }
+
+                if (node.parentSubNodeId && node.parentId) {
+                    const ownerNode = state.nodes[node.parentId];
+                    if (ownerNode) {
+                        const subNode = findSubNode(ownerNode.subNodes, node.parentSubNodeId);
+                        if (subNode) {
+                            subNode.childNodeId = null;
+                        }
+                    }
+                }
+
+                for (const edgeId of Object.keys(state.edges)) {
+                    if (state.edges[edgeId].targetId === nodeId) {
+                        delete state.edges[edgeId];
+                        break;
+                    }
+                }
+
+                node.parentId = null;
+                node.parentSubNodeId = null;
+                if (typeof ROOT_NODE_STYLE !== 'undefined') {
+                    node.style = { ...ROOT_NODE_STYLE, fillColor: node.style.fillColor };
+                }
+                
+                state.rootIds.push(nodeId);
+                state.isDirty = true;
             });
         },
 
@@ -482,18 +619,21 @@ export const useMindMapStore = create<MindMapStore>()(
 
                 // Expand if collapsed
                 if (newParent.collapsed) newParent.collapsed = false;
+                state.isDirty = true;
             });
         },
 
         setNodePosition: (nodeId, x, y) => {
             set((state) => {
                 state.manualPositions[nodeId] = { x, y };
+                state.isDirty = true;
             });
         },
 
         tidyUp: () => {
             set((state) => {
                 state.manualPositions = {};
+                state.isDirty = true;
             });
         },
 
@@ -502,8 +642,8 @@ export const useMindMapStore = create<MindMapStore>()(
                 for (const node of Object.values(state.nodes)) {
                     node.collapsed = false;
 
-                    const expandSubNodes = (subNodes: SubNode[]) => {
-                        for (const sn of subNodes) {
+                    const expandSubNodes = (sns: SubNode[]) => {
+                        for (const sn of sns) {
                             if (sn.childNodeId) {
                                 sn.collapsed = false;
                             }
@@ -514,17 +654,112 @@ export const useMindMapStore = create<MindMapStore>()(
                     };
                     expandSubNodes(node.subNodes);
                 }
+                state.isDirty = true;
+            });
+        },
+
+        collapseAllNodes: () => {
+            set((state) => {
+                for (const node of Object.values(state.nodes)) {
+                    if (node.children.length > 0) node.collapsed = true;
+                    if (node.subNodes.length > 0) node.subNodesCollapsed = true;
+                }
+                state.isDirty = true;
+            });
+        },
+
+        setNodeSide: (nodeId, side) => {
+            set((state) => {
+                const node = state.nodes[nodeId];
+                if (!node) return;
+                node.side = side;
+                state.isDirty = true;
+            });
+        },
+
+        reorderRootNode: (nodeId, direction) => {
+            set((state) => {
+                const idx = state.rootIds.indexOf(nodeId);
+                if (idx < 0) return;
+                const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+                if (swapIdx < 0 || swapIdx >= state.rootIds.length) return;
+                // Swap entries
+                [state.rootIds[idx], state.rootIds[swapIdx]] = [state.rootIds[swapIdx], state.rootIds[idx]];
+                state.isDirty = true;
+            });
+        },
+
+        reorderChildNode: (nodeId, direction) => {
+            set((state) => {
+                const node = state.nodes[nodeId];
+                if (!node || !node.parentId) return;
+                const parent = state.nodes[node.parentId];
+                if (!parent) return;
+
+                const children = parent.children;
+                const idx = children.indexOf(nodeId);
+                if (idx < 0) return;
+
+                // Only consider siblings on the same side for children of roots
+                const side = node.side || 'right';
+                const sameSideIndices = children
+                    .map((id, i) => ({ id, i }))
+                    .filter(({ id }) => (state.nodes[id]?.side || 'right') === side)
+                    .map(({ i }) => i);
+
+                const currentIdxInSide = sameSideIndices.indexOf(idx);
+                if (currentIdxInSide < 0) return;
+
+                const targetIdxInSide = direction === 'up' ? currentIdxInSide - 1 : currentIdxInSide + 1;
+                if (targetIdxInSide < 0 || targetIdxInSide >= sameSideIndices.length) return;
+
+                const swapIdx = sameSideIndices[targetIdxInSide];
+                
+                // Swap entries in the main array
+                const temp = children[idx];
+                children[idx] = children[swapIdx];
+                children[swapIdx] = temp;
+
+                state.isDirty = true;
+            });
+        },
+
+        moveRootToIndex: (nodeId, newIndex) => {
+            set((state) => {
+                const idx = state.rootIds.indexOf(nodeId);
+                if (idx < 0 || idx === newIndex) return;
+                state.rootIds.splice(idx, 1);
+                const clamped = Math.max(0, Math.min(newIndex, state.rootIds.length));
+                state.rootIds.splice(clamped, 0, nodeId);
+                state.isDirty = true;
+            });
+        },
+
+        moveChildToIndex: (nodeId, newIndex) => {
+            set((state) => {
+                const node = state.nodes[nodeId];
+                if (!node || !node.parentId) return;
+                const parent = state.nodes[node.parentId];
+                if (!parent) return;
+                const idx = parent.children.indexOf(nodeId);
+                if (idx < 0 || idx === newIndex) return;
+                parent.children.splice(idx, 1);
+                const clamped = Math.max(0, Math.min(newIndex, parent.children.length));
+                parent.children.splice(clamped, 0, nodeId);
+                state.isDirty = true;
             });
         },
 
         // ── SubNode Actions ─────────────────────────────────────────────────
 
         addSubNode: (nodeId, parentSubNodeId, text = 'New item') => {
+            let newSubId = '';
             set((state) => {
                 const node = state.nodes[nodeId];
                 if (!node) return;
 
                 const newSub = createSubNode(text, 'checklist');
+                newSubId = newSub.id;
 
                 if (parentSubNodeId) {
                     const parentSub = findSubNode(node.subNodes, parentSubNodeId);
@@ -534,7 +769,9 @@ export const useMindMapStore = create<MindMapStore>()(
                 } else {
                     node.subNodes.push(newSub);
                 }
+                state.isDirty = true;
             });
+            return newSubId;
         },
 
         addAttachmentSubNode: (nodeId, filePath, fileName) => {
@@ -543,6 +780,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 if (!node) return;
                 const newSub = createSubNode(fileName, 'attachment', filePath);
                 node.subNodes.push(newSub);
+                state.isDirty = true;
             });
         },
 
@@ -572,6 +810,7 @@ export const useMindMapStore = create<MindMapStore>()(
 
                 // Then remove the subNode itself
                 removeSubNode(node.subNodes, subNodeId);
+                state.isDirty = true;
             });
         },
 
@@ -590,6 +829,7 @@ export const useMindMapStore = create<MindMapStore>()(
                     const spawnedNode = state.nodes[subNode.childNodeId];
                     if (spawnedNode) spawnedNode.text = text;
                 }
+                state.isDirty = true;
             });
         },
 
@@ -634,6 +874,7 @@ export const useMindMapStore = create<MindMapStore>()(
                         }
                     }
                 }
+                state.isDirty = true;
             });
         },
 
@@ -643,6 +884,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 if (!node) return;
                 const subNode = findSubNode(node.subNodes, subNodeId);
                 if (subNode && subNode.childNodeId) subNode.collapsed = !subNode.collapsed;
+                state.isDirty = true;
             });
         },
 
@@ -670,6 +912,7 @@ export const useMindMapStore = create<MindMapStore>()(
 
                 // Expand parent if collapsed
                 if (node.collapsed) node.collapsed = false;
+                state.isDirty = true;
             });
             return newNodeId;
         },
@@ -707,6 +950,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 state.selectedNodeIds = state.selectedNodeIds.filter(
                     (id) => !subtreeIds.includes(id),
                 );
+                state.isDirty = true;
             });
         },
 
@@ -719,6 +963,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 const [removed] = node.subNodes.splice(idx, 1);
                 const clampedIndex = Math.max(0, Math.min(newIndex, node.subNodes.length));
                 node.subNodes.splice(clampedIndex, 0, removed);
+                state.isDirty = true;
             });
         },
 
@@ -740,6 +985,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 } else {
                     subNode.timeGranularity = granularity;
                 }
+                state.isDirty = true;
             });
         },
 
@@ -756,6 +1002,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 );
                 if (exists) return;
                 state.links[id] = { id, sourceId, targetId };
+                state.isDirty = true;
             });
             return id;
         },
@@ -764,6 +1011,7 @@ export const useMindMapStore = create<MindMapStore>()(
             set((state) => {
                 delete state.links[linkId];
                 if (state.selectedLinkId === linkId) state.selectedLinkId = null;
+                state.isDirty = true;
             });
         },
 
@@ -846,8 +1094,10 @@ export const useMindMapStore = create<MindMapStore>()(
                     return;
                 }
 
+                const visibleRootIds = state.rootIds.filter(id => !state.hiddenRootIds.includes(id));
+
                 // Calculate an exact theoretical layout just for sizing
-                const layout = computeLayout(state.nodes, state.rootIds, {
+                const layout = computeLayout(state.nodes, visibleRootIds, {
                     nodeWidth: 200,
                     nodeBaseHeight: 44,
                     subNodeRowHeight: 32,
@@ -930,7 +1180,24 @@ export const useMindMapStore = create<MindMapStore>()(
             });
         },
 
-        // ── Calendar ─────────────────────────────────────────────────────────
+        // ── Panels ─────────────────────────────────────────────────────────
+
+        toggleRootVisibility: (nodeId) => {
+            set((state) => {
+                if (state.hiddenRootIds.includes(nodeId)) {
+                    state.hiddenRootIds = state.hiddenRootIds.filter(id => id !== nodeId);
+                } else {
+                    state.hiddenRootIds.push(nodeId);
+                }
+            });
+            get().tidyUp(); // Auto layout whenever visibility toggled
+        },
+
+        toggleRootNodesPanel: () => {
+            set((state) => {
+                state.rootNodesPanelOpen = !state.rootNodesPanelOpen;
+            });
+        },
 
         toggleCalendar: () => {
             set((state) => {
@@ -944,29 +1211,70 @@ export const useMindMapStore = create<MindMapStore>()(
             });
         },
 
-        // ── Document ────────────────────────────────────────────────────────
-
-        setTitle: (title) => {
+        setConnectorStyle: (style) => {
             set((state) => {
-                state.title = title;
+                state.connectorStyle = style;
+                // Also update the new fields for backward compat
+                if (style === 'horizontal') {
+                    state.connectorAnchor = 'horizontal';
+                } else {
+                    state.connectorAnchor = 'adaptive';
+                    state.lineStyle = style as LineStyle;
+                }
+                state.isDirty = true;
             });
         },
 
-        loadDocument: (doc) => {
+        setConnectorAnchor: (anchor) => {
             set((state) => {
-                state.nodes = doc.nodes;
-                state.edges = doc.edges;
-                state.links = doc.links ?? {};
-                // Support legacy single-root docs
-                state.rootIds = doc.rootIds ?? ((doc as any).rootId ? [(doc as any).rootId] : []);
-                state.manualPositions = doc.manualPositions ?? {};
-                state.title = doc.title;
-                state.viewport = doc.viewport;
-                state.selectedNodeIds = [];
-                state.linkingSourceId = null;
-                state.selectedLinkId = null;
-                state.undoStack = [];
-                state.redoStack = [];
+                state.connectorAnchor = anchor;
+                state.isDirty = true;
+            });
+        },
+
+        setLineStyle: (style) => {
+            set((state) => {
+                state.lineStyle = style;
+                state.isDirty = true;
+            });
+        },
+
+        setAppSettings: (patch) => {
+            set((state) => {
+                Object.assign(state.appSettings, patch);
+            });
+        },
+
+        // ── Document ────────────────────────────────────────────────────────
+
+        setTitle: (title) => set({ title, isDirty: true }),
+
+        loadDocument: (doc) => {
+            // Migrate legacy connectorStyle to new fields
+            let anchor: ConnectorAnchor = doc.connectorAnchor ?? 'adaptive';
+            let lineSt: LineStyle = doc.lineStyle ?? 'orthogonal';
+            if (!doc.connectorAnchor && !doc.lineStyle && doc.connectorStyle) {
+                // Legacy migration
+                if (doc.connectorStyle === 'horizontal') {
+                    anchor = 'horizontal';
+                    lineSt = 'orthogonal';
+                } else {
+                    anchor = 'adaptive';
+                    lineSt = doc.connectorStyle as LineStyle;
+                }
+            }
+            set({
+                ...doc,
+                connectorAnchor: anchor,
+                lineStyle: lineSt,
+                selectedNodeIds: [],
+                selectedSubNodeId: null,
+                selectedSubNodeParentId: null,
+                linkingSourceId: null,
+                selectedLinkId: null,
+                undoStack: [],
+                redoStack: [],
+                isDirty: false,
             });
         },
 
@@ -999,11 +1307,18 @@ export const useMindMapStore = create<MindMapStore>()(
                 viewport: { ...state.viewport },
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
+                connectorStyle: state.connectorStyle,
+                connectorAnchor: state.connectorAnchor,
+                lineStyle: state.lineStyle,
             };
         },
 
         newDocument: () => {
-            set(() => createInitialState());
+            set(() => ({
+                ...createInitialState(),
+                // preserve calendar state and theme if needed, but not required
+                isDirty: false,
+            }));
         },
 
         // ── History ──────────────────────────────────────────────────────────
@@ -1013,6 +1328,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 const snapshot = JSON.stringify({
                     nodes: state.nodes,
                     edges: state.edges,
+                    links: state.links,
                     rootIds: state.rootIds,
                     manualPositions: state.manualPositions,
                     title: state.title,
@@ -1020,6 +1336,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 state.undoStack.push(snapshot);
                 if (state.undoStack.length > 100) state.undoStack.shift();
                 state.redoStack = [];
+                state.isDirty = true;
             });
         },
 
@@ -1070,5 +1387,7 @@ export const useMindMapStore = create<MindMapStore>()(
                 state.selectedNodeIds = [];
             });
         },
+
+        setDirty: (dirty) => set({ isDirty: dirty }),
     })),
 );

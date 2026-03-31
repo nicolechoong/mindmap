@@ -1,4 +1,10 @@
 import { useMindMapStore } from '../../store/store';
+import { 
+    IconUndo, IconRedo, IconPlus, IconSibling, IconX, 
+    IconMinus, IconFit, IconTidy, IconCurve, 
+    IconCornerDownRight, IconStraight, IconAnchorAdjust,
+    IconMenu, IconCalendar 
+} from '../common/SimpleIcon';
 
 interface FloatingBarProps {
     zoom: number;
@@ -27,21 +33,33 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
     const redoStack = useMindMapStore((s) => s.redoStack);
     const calendarOpen = useMindMapStore((s) => s.calendarOpen);
     const toggleCalendar = useMindMapStore((s) => s.toggleCalendar);
+    const connectorAnchor = useMindMapStore((s) => s.connectorAnchor);
+    const lineStyle = useMindMapStore((s) => s.lineStyle);
+    const setConnectorAnchor = useMindMapStore((s) => s.setConnectorAnchor);
+    const setLineStyle = useMindMapStore((s) => s.setLineStyle);
+    const tidyUp = useMindMapStore((s) => s.tidyUp);
+    const rootNodesPanelOpen = useMindMapStore((s) => s.rootNodesPanelOpen);
+    const toggleRootNodesPanel = useMindMapStore((s) => s.toggleRootNodesPanel);
 
     const firstSelected = selectedNodeIds.length > 0 ? selectedNodeIds[0] : null;
     const isRoot = firstSelected ? rootIds.includes(firstSelected) : false;
     const canDelete = firstSelected && !(isRoot && rootIds.length <= 1);
     const canAddSibling = firstSelected && (nodes[firstSelected]?.parentId || isRoot);
 
-    // Repurposed + button: add child if selected, add root if nothing selected
     const handleAdd = () => {
         pushUndo();
         if (firstSelected) {
             const newId = addChildNode(firstSelected);
-            if (newId) setSelection([newId]);
+            if (newId) {
+                setSelection([newId]);
+                window.dispatchEvent(new CustomEvent('mindmap:edit-node', { detail: { nodeId: newId } }));
+            }
         } else {
             const newId = addRootNode();
-            if (newId) setSelection([newId]);
+            if (newId) {
+                setSelection([newId]);
+                window.dispatchEvent(new CustomEvent('mindmap:edit-node', { detail: { nodeId: newId } }));
+            }
         }
     };
 
@@ -49,7 +67,10 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
         if (!firstSelected || !canAddSibling) return;
         pushUndo();
         const newId = addSiblingNode(firstSelected);
-        if (newId) setSelection([newId]);
+        if (newId) {
+            setSelection([newId]);
+            window.dispatchEvent(new CustomEvent('mindmap:edit-node', { detail: { nodeId: newId } }));
+        }
     };
 
     const handleDelete = () => {
@@ -69,7 +90,7 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
                     onClick={undo}
                     disabled={undoStack.length === 0}
                 >
-                    ↩
+                    <IconUndo size={16} />
                 </button>
                 <button
                     className="fab-btn"
@@ -77,7 +98,7 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
                     onClick={redo}
                     disabled={redoStack.length === 0}
                 >
-                    ↪
+                    <IconRedo size={16} />
                 </button>
             </div>
 
@@ -89,7 +110,7 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
                     title={firstSelected ? 'Add Child (Tab)' : 'Add Root Node'}
                     onClick={handleAdd}
                 >
-                    ＋
+                    <IconPlus />
                 </button>
                 <button
                     className="fab-btn"
@@ -97,7 +118,7 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
                     onClick={handleAddSibling}
                     disabled={!canAddSibling}
                 >
-                    ↕
+                    <IconSibling />
                 </button>
                 <button
                     className="fab-btn"
@@ -105,7 +126,7 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
                     onClick={handleDelete}
                     disabled={!canDelete}
                 >
-                    ✕
+                    <IconX size={16} />
                 </button>
             </div>
 
@@ -117,7 +138,7 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
                     const nextPercent = Math.floor((currentPercent - 1) / 10) * 10;
                     zoomViewport(nextPercent / 100);
                 }}>
-                    −
+                    <IconMinus size={16} />
                 </button>
                 <span className="fab-zoom">{Math.round(zoom * 100)}%</span>
                 <button className="fab-btn" title="Zoom In" onClick={() => {
@@ -125,7 +146,7 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
                     const nextPercent = Math.ceil((currentPercent + 1) / 10) * 10;
                     zoomViewport(nextPercent / 100);
                 }}>
-                    ＋
+                    <IconPlus size={16} />
                 </button>
                 <button className="fab-btn" title="Fit to Screen" onClick={() => {
                     const stage = document.querySelector('.konvajs-content');
@@ -135,19 +156,77 @@ export function FloatingBar({ zoom, onToggleTheme, theme }: FloatingBarProps) {
                         fitViewToNodes(window.innerWidth, window.innerHeight);
                     }
                 }}>
-                    ⊞
+                    <IconFit size={16} />
                 </button>
             </div>
 
             <div className="fab-divider" />
 
             <button
-                className={`fab-btn ${calendarOpen ? 'fab-btn-active' : ''}`}
-                title="Toggle Calendar (Ctrl+Shift+K)"
-                onClick={toggleCalendar}
+                className="fab-btn"
+                title="Auto Layout — Reset all nodes into neat level columns"
+                onClick={() => {
+                    pushUndo();
+                    tidyUp();
+                }}
             >
-                📅
+                <IconTidy size={16} />
             </button>
+
+            <div className="fab-divider" />
+
+            <div className="fab-group">
+                <button
+                    className={`fab-btn${lineStyle === 'bezier' ? ' fab-btn-active' : ''}`}
+                    title="Curved lines"
+                    onClick={() => setLineStyle('bezier')}
+                >
+                    <IconCurve size={16} />
+                </button>
+                <button
+                    className={`fab-btn${lineStyle === 'orthogonal' ? ' fab-btn-active' : ''}`}
+                    title="Right-angle lines"
+                    onClick={() => setLineStyle('orthogonal')}
+                >
+                    <IconCornerDownRight size={16} />
+                </button>
+                <button
+                    className={`fab-btn${lineStyle === 'straight' ? ' fab-btn-active' : ''}`}
+                    title="Straight lines"
+                    onClick={() => setLineStyle('straight')}
+                >
+                    <IconStraight size={16} />
+                </button>
+            </div>
+
+            <div className="fab-group">
+                <button
+                    className={`fab-btn${connectorAnchor === 'horizontal' ? ' fab-btn-active' : ''}`}
+                    title={connectorAnchor === 'horizontal' ? 'Horizontal anchors (left/right only) — click to switch to adaptive' : 'Adaptive anchors — click for horizontal-only'}
+                    onClick={() => setConnectorAnchor(connectorAnchor === 'horizontal' ? 'adaptive' : 'horizontal')}
+                >
+                    <IconAnchorAdjust size={16} />
+                </button>
+            </div>
+
+            <div className="fab-divider" />
+
+            <div className="fab-group">
+                <button
+                    className={`fab-btn ${rootNodesPanelOpen ? 'fab-btn-active' : ''}`}
+                    title="Toggle Root Nodes Panel"
+                    onClick={toggleRootNodesPanel}
+                >
+                    <IconMenu size={16} />
+                </button>
+                <button
+                    className={`fab-btn ${calendarOpen ? 'fab-btn-active' : ''}`}
+                    title="Toggle Calendar (Ctrl+Shift+K)"
+                    onClick={toggleCalendar}
+                >
+                    <IconCalendar size={16} />
+                </button>
+            </div>
         </div>
     );
 }

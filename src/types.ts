@@ -42,9 +42,11 @@ export interface MindMapNode {
     text: string;
     notes: string;
     collapsed: boolean;
+    subNodesCollapsed?: boolean;
     subNodes: SubNode[];
     style: NodeStyle;
     position: { x: number; y: number };
+    side?: 'left' | 'right';
 }
 
 // ── Edges ─────────────────────────────────────────────────────────────────
@@ -89,7 +91,26 @@ export interface ThemeConfig {
     defaultEdgeStyle: EdgeStyle;
 }
 
-// ── Document ──────────────────────────────────────────────────────────────
+// ── App Settings ────────────────────────────────────────────────────────────────────────
+
+/** @deprecated Use ConnectorAnchor + LineStyle instead */
+export type ConnectorStyle = 'bezier' | 'orthogonal' | 'horizontal';
+
+/** Where connectors attach to nodes */
+export type ConnectorAnchor = 'adaptive' | 'horizontal';
+
+/** Shape of the connector line */
+export type LineStyle = 'bezier' | 'orthogonal' | 'straight';
+
+export interface AppSettings {
+    libraryPath: string;            // where .mindmap files are stored
+    defaultConnectorStyle: ConnectorStyle; // legacy
+    autoSaveInterval: 0 | 30 | 60 | 300;  // seconds, 0 = off
+    theme: 'light' | 'dark';
+    inheritParentColor: boolean;    // new child nodes copy the parent's fill color
+}
+
+// ── Document ──────────────────────────────────────────────────────────────────────────
 
 export interface MindMapDocument {
     version: number;
@@ -103,6 +124,9 @@ export interface MindMapDocument {
     viewport: { x: number; y: number; zoom: number };
     createdAt: string;
     updatedAt: string;
+    connectorStyle?: ConnectorStyle;  // legacy, for backward compat
+    connectorAnchor?: ConnectorAnchor;
+    lineStyle?: LineStyle;
 }
 
 // ── Viewport ──────────────────────────────────────────────────────────────

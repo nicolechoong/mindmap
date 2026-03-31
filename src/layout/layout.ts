@@ -61,6 +61,7 @@ interface LayoutNode {
     x: number;
     y: number;
     subtreeHeight: number;
+    side?: 'left' | 'right';
 }
 
 function buildLayoutTree(
@@ -103,25 +104,57 @@ function buildLayoutTree(
         x: 0,
         y: 0,
         subtreeHeight: 0,
+        side: node.side,
     };
 }
 
-function computeSubtreeHeight(node: LayoutNode, config: LayoutConfig): number {
+function computeSubtreeHeight(
+    node: LayoutNode, 
+    config: LayoutConfig,
+    depth = 0,
+    manualPositions?: Record<string, { x: number; y: number }>,
+    rootX = 0
+): number {
     if (node.children.length === 0) {
         node.subtreeHeight = node.height;
         return node.subtreeHeight;
     }
 
-    let totalChildrenHeight = 0;
-    for (let i = 0; i < node.children.length; i++) {
-        totalChildrenHeight += computeSubtreeHeight(node.children[i], config);
-        if (i < node.children.length - 1) {
-            totalChildrenHeight += config.verticalSpacing;
+    if (depth === 0 && manualPositions) {
+        let leftHeight = 0;
+        let rightHeight = 0;
+        let leftCount = 0;
+        let rightCount = 0;
+        
+        for (let i = 0; i < node.children.length; i++) {
+            const child = node.children[i];
+            const side = child.side || (manualPositions[child.id] && manualPositions[child.id].x < rootX ? 'left' : 'right');
+            const h = computeSubtreeHeight(child, config, depth + 1, manualPositions, rootX);
+            if (side === 'left') {
+                leftHeight += h;
+                leftCount++;
+            } else {
+                rightHeight += h;
+                rightCount++;
+            }
         }
-    }
+        if (leftCount > 1) leftHeight += (leftCount - 1) * config.verticalSpacing;
+        if (rightCount > 1) rightHeight += (rightCount - 1) * config.verticalSpacing;
+        
+        node.subtreeHeight = Math.max(node.height, leftHeight, rightHeight);
+        return node.subtreeHeight;
+    } else {
+        let totalChildrenHeight = 0;
+        for (let i = 0; i < node.children.length; i++) {
+            totalChildrenHeight += computeSubtreeHeight(node.children[i], config, depth + 1, manualPositions, rootX);
+            if (i < node.children.length - 1) {
+                totalChildrenHeight += config.verticalSpacing;
+            }
+        }
 
-    node.subtreeHeight = Math.max(node.height, totalChildrenHeight);
-    return node.subtreeHeight;
+        node.subtreeHeight = Math.max(node.height, totalChildrenHeight);
+        return node.subtreeHeight;
+    }
 }
 
 function assignPositions(
@@ -129,17 +162,84 @@ function assignPositions(
     x: number,
     yStart: number,
     config: LayoutConfig,
+    manualPositions: Record<string, { x: number; y: number }>,
+    rootX: number,
+    depth = 0,
+    parentDirection = 1
 ): void {
-    node.x = x;
-    node.y = yStart + node.subtreeHeight / 2 - node.height / 2;
+    const manualPos = manualPositions[node.id];
+
+    if (depth === 0) {
+        // Root node: Fully respect manual position if it exists
+        node.x = manualPos ? manualPos.x : x;
+        node.y = manualPos ? manualPos.y : yStart + node.subtreeHeight / 2 - node.height / 2;
+        
+        // Partition children into left and right
+        const leftChildren: LayoutNode[] = [];
+        const rightChildren: LayoutNode[] = [];
+        for (const child of node.children) {
+            const side = child.side || (manualPositions[child.id] && manualPositions[child.id].x < rootX ? 'left' : 'right');
+            if (side === 'left') {
+                leftChildren.push(child);
+            } else {
+                rightChildren.push(child);
+            }
+        }
+        
+        // Helper to layout a list of children
+        const layoutHemisphere = (children: LayoutNode[], direction: number) => {
+            if (children.length === 0) return;
+            const totalHeight = children.reduce((sum, c) => sum + c.subtreeHeight, 0) + (children.length - 1) * config.verticalSpacing;
+            const nodeCenterY = node.y + node.height / 2;
+            let currentY = nodeCenterY - totalHeight / 2;
+            const childX = node.x + direction * config.horizontalSpacing;
+            
+            for (const child of children) {
+                assignPositions(child, childX, currentY, config, manualPositions, rootX, depth + 1, direction);
+                currentY += child.subtreeHeight + config.verticalSpacing;
+            }
+        };
+
+        layoutHemisphere(leftChildren, -1);
+        layoutHemisphere(rightChildren, 1);
+        return; // Root node handles children manually here
+    } else {
+        // Child nodes: Enforce neat auto-layout
+        // Only 1st level children can determine their branch hemisphere (left/right) from manual pos
+        let direction = parentDirection;
+        if (depth === 1) {
+            const side = node.side || (manualPos && manualPos.x < rootX ? 'left' : 'right');
+            direction = side === 'left' ? -1 : 1;
+        }
+
+        // Snap X to the exact grid position based on depth and direction
+        node.x = depth === 1 ? rootX + direction * config.horizontalSpacing : x;
+        
+        // Always geometrically center Y within the available subtree slot
+        node.y = yStart + node.subtreeHeight / 2 - node.height / 2;
+        
+        // Store direction for next level
+        parentDirection = direction;
+    }
 
     if (node.children.length === 0) return;
 
-    const childX = x + config.horizontalSpacing;
-    let currentY = yStart + (node.subtreeHeight - sumChildrenHeight(node, config)) / 2;
+    // We calculate children from our perfectly rigid snap
+    const childX = node.x + parentDirection * config.horizontalSpacing;
+    const nodeCenterY = node.y + node.height / 2;
+    let currentY = nodeCenterY - sumChildrenHeight(node, config) / 2;
 
     for (let i = 0; i < node.children.length; i++) {
-        assignPositions(node.children[i], childX, currentY, config);
+        assignPositions(
+            node.children[i], 
+            childX, 
+            currentY, 
+            config, 
+            manualPositions, 
+            rootX, 
+            depth + 1, 
+            parentDirection
+        );
         currentY += node.children[i].subtreeHeight + config.verticalSpacing;
     }
 }
@@ -183,6 +283,7 @@ export function computeLayout(
     rootIds: string | string[],
     config: Partial<LayoutConfig> = {},
     nodeHeights?: Map<string, number>,
+    manualPositions?: Record<string, { x: number; y: number }>,
 ): Map<string, NodeLayoutInfo> {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
     const result = new Map<string, NodeLayoutInfo>();
@@ -195,15 +296,17 @@ export function computeLayout(
     for (const rootId of ids) {
         const tree = buildLayoutTree(nodes, rootId, mergedConfig, nodeHeights);
         if (tree) {
-            computeSubtreeHeight(tree, mergedConfig);
             trees.push(tree);
         }
     }
 
     // Stack trees vertically
     let currentY = 0;
+    const posRecord = manualPositions || {};
     for (let i = 0; i < trees.length; i++) {
-        assignPositions(trees[i], 0, currentY, mergedConfig);
+        const rootX = posRecord[trees[i].id]?.x ?? 0;
+        computeSubtreeHeight(trees[i], mergedConfig, 0, posRecord, rootX);
+        assignPositions(trees[i], 0, currentY, mergedConfig, posRecord, rootX);
         flattenLayout(trees[i], result);
         currentY += trees[i].subtreeHeight + TREE_GAP;
     }

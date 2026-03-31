@@ -1,3 +1,5 @@
+import { IconKeyboard } from '../common/SimpleIcon';
+
 interface ShortcutsModalProps {
     onClose: () => void;
 }
@@ -27,7 +29,10 @@ export function ShortcutsModal({ onClose }: ShortcutsModalProps) {
     return (
         <div className="shortcuts-overlay" onClick={onClose}>
             <div className="shortcuts-modal" onClick={(e) => e.stopPropagation()}>
-                <h2>⌨ Keyboard Shortcuts</h2>
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <IconKeyboard size={24} />
+                    Keyboard Shortcuts
+                </h2>
                 <table>
                     <tbody>
                         {shortcuts.map(([key, desc], i) => (
@@ -38,7 +43,7 @@ export function ShortcutsModal({ onClose }: ShortcutsModalProps) {
                         ))}
                     </tbody>
                 </table>
-                <button className="shortcuts-close" onClick={onClose}>Close</button>
+                <button className="shortcuts-close" onClick={onClose} title="Close Shortcuts">Close</button>
             </div>
         </div>
     );

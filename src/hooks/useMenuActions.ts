@@ -45,11 +45,13 @@ export function useMenuActions(
                 case 'save': {
                     const doc = store.toDocument();
                     await window.electronAPI.fileSave(JSON.stringify(doc, null, 2));
+                    store.setDirty(false);
                     break;
                 }
                 case 'saveAs': {
                     const doc = store.toDocument();
                     await window.electronAPI.fileSaveAs(JSON.stringify(doc, null, 2));
+                    store.setDirty(false);
                     break;
                 }
                 case 'exportMindmap': {
@@ -98,6 +100,14 @@ export function useMenuActions(
                 case 'expandAll':
                     store.pushUndo();
                     store.expandAllNodes();
+                    break;
+                case 'collapseAll':
+                    store.pushUndo();
+                    store.collapseAllNodes();
+                    // Reposition view to show root nodes after layout recomputes
+                    setTimeout(() => {
+                        store.fitViewToNodes(window.innerWidth, window.innerHeight);
+                    }, 50);
                     break;
                 case 'zoomIn':
                     store.zoomViewport(store.viewport.zoom + 0.15);

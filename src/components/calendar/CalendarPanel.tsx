@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useMindMapStore } from '../../store/store';
+import { IconChevronLeft, IconChevronRight, IconX } from '../common/SimpleIcon';
 import {
     getWeekStart,
     getWeekDates,
@@ -77,11 +78,17 @@ export function CalendarPanel() {
         <div className="cal-panel">
             {/* ── Header ── */}
             <div className="cal-header">
-                <button className="cal-nav-btn" onClick={prevWeek} title="Previous week">◀</button>
+                <button className="cal-nav-btn" onClick={prevWeek} title="Previous week">
+                    <IconChevronLeft size={16} />
+                </button>
                 <span className="cal-week-label">{weekLabel}</span>
-                <button className="cal-nav-btn" onClick={nextWeek} title="Next week">▶</button>
+                <button className="cal-nav-btn" onClick={nextWeek} title="Next week">
+                    <IconChevronRight size={16} />
+                </button>
                 <button className="cal-today-btn" onClick={goToday}>Today</button>
-                <button className="cal-close-btn" onClick={toggleCalendar} title="Close calendar">✕</button>
+                <button className="cal-close-btn" onClick={toggleCalendar} title="Close calendar">
+                    <IconX size={16} />
+                </button>
             </div>
 
             {/* ── Grid ── */}

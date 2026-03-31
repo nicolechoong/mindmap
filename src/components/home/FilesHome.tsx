@@ -1,4 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { 
+    IconPlus, IconBrain, IconFolder, 
+    IconMoreVertical, IconAlertTriangle, 
+    IconPencil, IconTrash 
+} from '../common/SimpleIcon';
 
 const GREETINGS = [
     "hello father here are your mindmaps",
@@ -31,10 +36,25 @@ export function FilesHome({ onOpenFile, onNewFile }: FilesHomeProps) {
     const [newName, setNewName] = useState('');
     const newNameRef = useRef<HTMLInputElement>(null);
 
+    const [isLoading, setIsLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
     const loadFiles = useCallback(async () => {
-        if (!window.electronAPI?.libraryList) return;
-        const list = await window.electronAPI.libraryList();
-        setFiles(list);
+        if (!window.electronAPI?.libraryList) {
+            setIsLoading(false);
+            return;
+        }
+        try {
+            setError(null);
+            setIsLoading(true);
+            const list = await window.electronAPI.libraryList();
+            setFiles(list);
+        } catch (err) {
+            console.error('Failed to load files:', err);
+            setError('Could not access your mind maps folder. Please check your folder settings.');
+        } finally {
+            setIsLoading(false);
+        }
     }, []);
 
     useEffect(() => {
@@ -141,8 +161,8 @@ export function FilesHome({ onOpenFile, onNewFile }: FilesHomeProps) {
     return (
         <div className="files-home">
             <div className="files-header">
-                <div className="files-logo">
-                    <span className="files-logo-icon">🧠</span>
+                <div className="files-logo" title="MindMap Home">
+                    <IconBrain size={24} className="files-logo-icon-svg" />
                     <span className="files-logo-text">MindMap</span>
                 </div>
             </div>
@@ -152,13 +172,20 @@ export function FilesHome({ onOpenFile, onNewFile }: FilesHomeProps) {
 
                 <div className="files-grid">
                     {/* New file card */}
-                    <button className="file-card file-card-new" onClick={handleCreate}>
-                        <div className="file-card-new-icon">＋</div>
+                    <button 
+                        className="file-card file-card-new" 
+                        onClick={handleCreate} 
+                        disabled={isLoading}
+                        title="Create a new mind map"
+                    >
+                        <div className="file-card-new-icon">
+                            <IconPlus size={32} strokeWidth={1.5} />
+                        </div>
                         <div className="file-card-new-label">New Mind Map</div>
                     </button>
 
                     {/* File cards */}
-                    {files.map((file) => (
+                    {!isLoading && files.map((file) => (
                         <div
                             key={file.filePath}
                             className="file-card"
@@ -200,17 +227,36 @@ export function FilesHome({ onOpenFile, onNewFile }: FilesHomeProps) {
                                 onClick={(e) => handleCardMenu(e, file)}
                                 title="More options"
                             >
-                                ⋮
+                                <IconMoreVertical size={18} />
                             </button>
                         </div>
                     ))}
                 </div>
 
-                {files.length === 0 && (
+                {isLoading && (
                     <div className="files-empty">
-                        <div className="files-empty-icon">🗂️</div>
+                        <div className="files-empty-loading-spinner" />
+                        <div className="files-empty-text">Loading your mind maps…</div>
+                    </div>
+                )}
+
+                {error && (
+                    <div className="files-empty files-error">
+                        <div className="files-empty-icon">
+                            <IconAlertTriangle size={48} strokeWidth={1.5} />
+                        </div>
+                        <div className="files-empty-text">{error}</div>
+                        <button className="files-error-retry" onClick={loadFiles}>Retry</button>
+                    </div>
+                )}
+
+                {!isLoading && !error && files.length === 0 && (
+                    <div className="files-empty">
+                        <div className="files-empty-icon">
+                            <IconFolder size={48} strokeWidth={1.5} />
+                        </div>
                         <div className="files-empty-text">No mind maps yet</div>
-                        <div className="files-empty-hint">Click "＋ New Mind Map" to create your first one</div>
+                        <div className="files-empty-hint">Click "New Mind Map" to create your first one</div>
                     </div>
                 )}
 
@@ -231,15 +277,19 @@ export function FilesHome({ onOpenFile, onNewFile }: FilesHomeProps) {
                     >
                         <button
                             className="file-menu-item"
+                            title="Rename this mind map"
                             onClick={(e) => { e.stopPropagation(); handleRenameStart(menuFile); }}
                         >
-                            ✏️ Rename
+                            <IconPencil size={14} />
+                            <span>Rename</span>
                         </button>
                         <button
                             className="file-menu-item file-menu-danger"
+                            title="Format this file: delete it permanently"
                             onClick={(e) => { e.stopPropagation(); handleDelete(menuFile); }}
                         >
-                            🗑️ Delete
+                            <IconTrash size={14} />
+                            <span>Delete</span>
                         </button>
                     </div>
                 </>

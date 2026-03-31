@@ -86,7 +86,10 @@ export function useKeyboard() {
                 e.preventDefault();
                 store.pushUndo();
                 const newId = store.addChildNode(firstSelected);
-                if (newId) store.setSelection([newId]);
+                if (newId) {
+                    store.setSelection([newId]);
+                    window.dispatchEvent(new CustomEvent('mindmap:edit-node', { detail: { nodeId: newId } }));
+                }
                 return;
             }
 
@@ -97,7 +100,10 @@ export function useKeyboard() {
                 if (node?.parentId || store.rootIds.includes(firstSelected)) {
                     store.pushUndo();
                     const newId = store.addSiblingNode(firstSelected);
-                    if (newId) store.setSelection([newId]);
+                    if (newId) {
+                        store.setSelection([newId]);
+                        window.dispatchEvent(new CustomEvent('mindmap:edit-node', { detail: { nodeId: newId } }));
+                    }
                 }
                 return;
             }
@@ -138,8 +144,23 @@ export function useKeyboard() {
             if (e.key === 'ArrowRight') {
                 e.preventDefault();
                 const node = store.nodes[firstSelected];
-                if (node && node.children.length > 0 && !node.collapsed) {
-                    store.setSelection([node.children[0]]);
+                if (!node) return;
+                
+                const isRoot = !node.parentId;
+                const side = node.side || 'right';
+
+                if (isRoot) {
+                    // Go to first child on the right
+                    const rightChildren = node.children.filter(id => (store.nodes[id]?.side || 'right') === 'right');
+                    if (rightChildren.length > 0) store.setSelection([rightChildren[0]]);
+                } else if (side === 'right') {
+                    // Go outwards to children
+                    if (node.children.length > 0 && !node.collapsed) {
+                        store.setSelection([node.children[0]]);
+                    }
+                } else {
+                    // side === 'left' -> go inwards to parent
+                    if (node.parentId) store.setSelection([node.parentId]);
                 }
                 return;
             }
@@ -147,8 +168,23 @@ export function useKeyboard() {
             if (e.key === 'ArrowLeft') {
                 e.preventDefault();
                 const node = store.nodes[firstSelected];
-                if (node?.parentId) {
-                    store.setSelection([node.parentId]);
+                if (!node) return;
+                
+                const isRoot = !node.parentId;
+                const side = node.side || 'right';
+
+                if (isRoot) {
+                    // Go to first child on the left
+                    const leftChildren = node.children.filter(id => store.nodes[id]?.side === 'left');
+                    if (leftChildren.length > 0) store.setSelection([leftChildren[0]]);
+                } else if (side === 'left') {
+                    // Go outwards to children
+                    if (node.children.length > 0 && !node.collapsed) {
+                        store.setSelection([node.children[0]]);
+                    }
+                } else {
+                    // side === 'right' -> go inwards to parent
+                    if (node.parentId) store.setSelection([node.parentId]);
                 }
                 return;
             }
@@ -159,9 +195,11 @@ export function useKeyboard() {
                 if (node?.parentId) {
                     const parent = store.nodes[node.parentId];
                     if (parent) {
-                        const idx = parent.children.indexOf(firstSelected);
-                        if (idx < parent.children.length - 1) {
-                            store.setSelection([parent.children[idx + 1]]);
+                        const side = node.side || 'right';
+                        const sameSideSiblings = parent.children.filter(id => (store.nodes[id]?.side || 'right') === side);
+                        const idx = sameSideSiblings.indexOf(firstSelected);
+                        if (idx >= 0 && idx < sameSideSiblings.length - 1) {
+                            store.setSelection([sameSideSiblings[idx + 1]]);
                         }
                     }
                 } else {
@@ -180,9 +218,11 @@ export function useKeyboard() {
                 if (node?.parentId) {
                     const parent = store.nodes[node.parentId];
                     if (parent) {
-                        const idx = parent.children.indexOf(firstSelected);
+                        const side = node.side || 'right';
+                        const sameSideSiblings = parent.children.filter(id => (store.nodes[id]?.side || 'right') === side);
+                        const idx = sameSideSiblings.indexOf(firstSelected);
                         if (idx > 0) {
-                            store.setSelection([parent.children[idx - 1]]);
+                            store.setSelection([sameSideSiblings[idx - 1]]);
                         }
                     }
                 } else {

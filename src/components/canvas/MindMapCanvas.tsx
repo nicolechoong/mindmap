@@ -526,19 +526,75 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
         return { minY, maxY };
     }, [layout]);
 
+    // Compute total bounds of all nodes (including layout and manual positions)
+    const totalBounds = useMemo(() => {
+        let minX = Infinity, maxX = -Infinity;
+        let minY = Infinity, maxY = -Infinity;
+        let hasNodes = false;
+        for (const [nodeId, dims] of nodeDims) {
+            hasNodes = true;
+            const manual = manualPositions[nodeId];
+            const info = layout.get(nodeId);
+            const x = manual ? manual.x : (info ? info.x : 0);
+            const y = manual ? manual.y : (info ? info.y : 0);
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x + (info ? info.width : NODE_WIDTH));
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y + dims.totalHeight);
+        }
+        if (!hasNodes) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+        return { minX, maxX, minY, maxY };
+    }, [nodeDims, manualPositions, layout]);
+
     const offsetX = dimensions.width * 0.12;
     const forestHeight = forestBounds.maxY - forestBounds.minY;
     const offsetY = dimensions.height / 2 - forestBounds.minY - forestHeight / 2;
 
-    // Wheel zoom
+    const clampViewport = useCallback((newX: number, newY: number, zoom: number) => {
+        let { minX, maxX, minY, maxY } = totalBounds;
+
+        minX += offsetX;
+        maxX += offsetX;
+        minY += offsetY;
+        maxY += offsetY;
+
+        const marginX = Math.min(200, dimensions.width / 2);
+        const marginY = Math.min(200, dimensions.height / 2);
+
+        const limitMinX = marginX - maxX * zoom;
+        const limitMaxX = dimensions.width - marginX - minX * zoom;
+        const limitMinY = marginY - maxY * zoom;
+        const limitMaxY = dimensions.height - marginY - minY * zoom;
+
+        const clamp = (val: number, min: number, max: number) => {
+            if (min > max) return Math.max(max, Math.min(min, val));
+            return Math.max(min, Math.min(max, val));
+        };
+
+        return {
+            x: clamp(newX, limitMinX, limitMaxX),
+            y: clamp(newY, limitMinY, limitMaxY)
+        };
+    }, [totalBounds, offsetX, offsetY, dimensions]);
+
+    // Wheel zoom / pan
     const handleWheel = useCallback(
         (e: Konva.KonvaEventObject<WheelEvent>) => {
             e.evt.preventDefault();
-            const scaleBy = 1.06;
-            const newZoom = e.evt.deltaY < 0 ? stageZoom * scaleBy : stageZoom / scaleBy;
-            zoomViewport(Math.max(0.15, Math.min(3, newZoom)));
+            if (e.evt.ctrlKey || e.evt.metaKey) {
+                const scaleBy = 1.06;
+                const newZoom = e.evt.deltaY < 0 ? stageZoom * scaleBy : stageZoom / scaleBy;
+                zoomViewport(Math.max(0.15, Math.min(3, newZoom)));
+            } else {
+                const clamped = clampViewport(stagePos.x - e.evt.deltaX, stagePos.y - e.evt.deltaY, stageZoom);
+                setViewport({
+                    x: clamped.x,
+                    y: clamped.y,
+                    zoom: stageZoom
+                });
+            }
         },
-        [stageZoom, zoomViewport],
+        [stageZoom, stagePos, zoomViewport, setViewport, clampViewport],
     );
 
     const handleStageDragEnd = useCallback(
@@ -994,6 +1050,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                 width={dimensions.width}
                 height={dimensions.height}
                 draggable={!linkingSourceId}
+                dragBoundFunc={(pos) => clampViewport(pos.x, pos.y, stageZoom)}
                 scaleX={stageZoom}
                 scaleY={stageZoom}
                 x={stagePos.x}

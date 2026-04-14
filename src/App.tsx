@@ -141,6 +141,17 @@ export function App() {
         });
     }, [store.isDirty]);
 
+    // Prevent default drag and drop behavior to avoid opening dropped files in the app
+    useEffect(() => {
+        const preventDefault = (e: DragEvent) => e.preventDefault();
+        window.addEventListener('dragover', preventDefault);
+        window.addEventListener('drop', preventDefault);
+        return () => {
+            window.removeEventListener('dragover', preventDefault);
+            window.removeEventListener('drop', preventDefault);
+        };
+    }, []);
+
     // Auto-save effect
     useEffect(() => {
         const interval = Number(appSettings.autoSaveInterval);

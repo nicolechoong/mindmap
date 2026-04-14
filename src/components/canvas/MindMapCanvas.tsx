@@ -957,6 +957,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
         (e: React.DragEvent<HTMLDivElement>) => {
             if (!e.dataTransfer.types.includes('Files')) return;
             e.preventDefault();
+            e.stopPropagation();
             e.dataTransfer.dropEffect = 'copy';
 
             // Hit-test against nodes to find drop target
@@ -995,7 +996,9 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
 
     const handleFileDrop = useCallback(
         (e: React.DragEvent<HTMLDivElement>) => {
+            if (!e.dataTransfer.types.includes('Files')) return;
             e.preventDefault();
+            e.stopPropagation();
             setDropTargetNodeId(null);
             if (!e.dataTransfer.files.length) return;
 
@@ -1041,6 +1044,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
             ref={containerRef}
             className="canvas-container"
             style={{ background: COLORS.canvasBg }}
+            onDragEnter={handleFileDragOver}
             onDragOver={handleFileDragOver}
             onDragLeave={handleFileDragLeave}
             onDrop={handleFileDrop}

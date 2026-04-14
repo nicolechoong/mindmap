@@ -103,35 +103,54 @@ function wrapTextWithNewlines(
     _measureCtx.font = `${fontWeight} ${fontSize}px Inter, sans-serif`.trim();
     if (!text || !text.trim()) return text;
 
-    const words = text.split(/(\s+)/);
-    let result = '';
-    let currentLine = '';
+    const paragraphs = text.split('\n');
+    let finalResult = '';
 
-    for (const word of words) {
-        if (_measureCtx.measureText(word).width > maxWidth) {
-            // Word is too long, must break it by character
-            for (const char of word) {
-                const testLine = currentLine + char;
-                if (_measureCtx.measureText(testLine).width > maxWidth && currentLine !== '') {
-                    result += currentLine + '\n';
-                    currentLine = char;
+    for (let i = 0; i < paragraphs.length; i++) {
+        const paragraph = paragraphs[i];
+        if (!paragraph) {
+            if (i < paragraphs.length - 1) finalResult += '\n';
+            continue;
+        }
+
+        const words = paragraph.split(/(\s+)/);
+        let result = '';
+        let currentLine = '';
+
+        for (const word of words) {
+            if (!word) continue;
+            
+            if (_measureCtx.measureText(word).width > maxWidth) {
+                // Word is too long, must break it by character
+                for (const char of word) {
+                    const testLine = currentLine + char;
+                    if (_measureCtx.measureText(testLine).width > maxWidth && currentLine !== '') {
+                        result += currentLine + '\n';
+                        currentLine = char;
+                    } else {
+                        currentLine = testLine;
+                    }
+                }
+            } else {
+                const testLine = currentLine + word;
+                if (_measureCtx.measureText(testLine).width > maxWidth && currentLine.trim() !== '') {
+                    // Remove trailing spaces on lines that wrap
+                    result += currentLine.replace(/\s+$/, '') + '\n';
+                    currentLine = word.trimStart();
                 } else {
                     currentLine = testLine;
                 }
             }
-        } else {
-            const testLine = currentLine + word;
-            if (_measureCtx.measureText(testLine).width > maxWidth && currentLine.trim() !== '') {
-                // Remove trailing spaces on lines that wrap
-                result += currentLine.replace(/\s+$/, '') + '\n';
-                currentLine = word.trimStart();
-            } else {
-                currentLine = testLine;
-            }
+        }
+        result += currentLine;
+        
+        finalResult += result;
+        if (i < paragraphs.length - 1) {
+            finalResult += '\n';
         }
     }
-    result += currentLine;
-    return result;
+    
+    return finalResult;
 }
 
 function measureTextLines(

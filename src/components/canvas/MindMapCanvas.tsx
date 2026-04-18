@@ -37,9 +37,11 @@ function getColors(theme: 'light' | 'dark') {
             selectedRing: '#7c75ff',
             edgeColor: '#555570',
             edgePromoted: '#7c75ff',
+            linkColor: '#ff9800',
+            linkColorSelected: '#ffb74d',
             connectorBg: '#3a3a50',
             canvasBg: '#0f0f14',
-            addBtnText: '#555570',
+            addBtnText: '#8c8c9a',
             rootText: '#ffffff',
             timeBadgePlanned: { bg: '#1e2a3a', text: '#7ab8e0' },   // muted blue
             timeBadgeDeadline: { bg: '#3a2a1e', text: '#e0a87a' },   // muted orange
@@ -60,6 +62,8 @@ function getColors(theme: 'light' | 'dark') {
         selectedRing: '#6c63ff',
         edgeColor: '#b0b0c0',
         edgePromoted: '#6c63ff',
+        linkColor: '#f57c00',
+        linkColorSelected: '#ff9800',
         connectorBg: '#d8d8e0',
         canvasBg: '#f4f4f8',
         addBtnText: '#999',
@@ -1160,7 +1164,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                                 {/* Visible dotted line */}
                                 <Line
                                     points={ll.points}
-                                    stroke={isSelected ? COLORS.edgePromoted : COLORS.edgeColor}
+                                    stroke={isSelected ? COLORS.linkColorSelected : COLORS.linkColor}
                                     strokeWidth={isSelected ? 2 : 1.5}
                                     dash={[6, 4]}
                                     {...(lineStyle === 'bezier'
@@ -1187,7 +1191,7 @@ export function MindMapCanvas({ stageRef, theme }: MindMapCanvasProps) {
                         return (
                             <Line
                                 points={[sCX, sCY, linkingMousePos.x, linkingMousePos.y]}
-                                stroke={COLORS.edgePromoted}
+                                stroke={COLORS.linkColorSelected}
                                 strokeWidth={1.5}
                                 dash={[6, 4]}
                                 cornerRadius={8}
